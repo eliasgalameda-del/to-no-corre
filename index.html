@@ -2805,7 +2805,12 @@ function App() {
     } catch (e) { setErr(e.message || String(e)); setState("error"); }
   };
   useEffect(() => {
-    SB.auth.getSession().then((r) => { if (r.data.session) start(r.data.session); else setState("login"); });
+    SB.auth.getSession().then(async (r) => {
+      if (!r.data.session) { setState("login"); return; }
+      const u = await SB.auth.getUser();
+      if (u.error || !u.data || !u.data.user) { await SB.auth.signOut(); setState("login"); return; }
+      start(r.data.session);
+    });
   }, []);
   const logout = async () => {
     try {
@@ -2814,7 +2819,10 @@ function App() {
         const k = localStorage.key(i);
         if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
       }
-      if (rows.length) { const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }); if (r.error) { alert("N\u00E3o consegui salvar seus dados na nuvem. Tente de novo."); return; } }
+      if (rows.length) { const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }); if (r.error) {
+        if (!confirm("N\u00E3o consegui salvar seus dados na nuvem. Sair mesmo assim? Seus dados continuam guardados neste aparelho.")) return;
+        await SB.auth.signOut(); _sbUser = null; location.reload(); return;
+      } }
       Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0).forEach((k) => localStorage.removeItem(k));
     } catch (e) {}
     await SB.auth.signOut(); _sbUser = null; location.reload();
