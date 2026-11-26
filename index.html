@@ -2534,7 +2534,8 @@ const TABS = [
   { id: "personal", label: "Pessoal", icon: "\u{1F33F}" },
   { id: "analytics", label: "Analytics", icon: "\u{1F4CA}" },
   { id: "notes", label: "Notas", icon: "\u{1F4DD}" },
-  { id: "pomodoro", label: "Foco", icon: "\u{1F345}" }
+  { id: "pomodoro", label: "Foco", icon: "\u{1F345}" },
+  { id: "profile", label: "Perfil", icon: "\u{1F464}" }
 ];
 const _memCache = {};
 function _lsGet(key) {
@@ -2590,6 +2591,51 @@ function usePersist(key, initVal) {
   }, [key]);
   return [val, setVal];
 }
+function ProfileView({ onLogout, counts }) {
+  const [user, setUser] = useState(null);
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [confirmOut, setConfirmOut] = useState(false);
+  useEffect(() => { SB.auth.getUser().then((r) => { if (r.data && r.data.user) setUser(r.data.user); }); }, []);
+  const email = user ? user.email : "...";
+  const initial = (email[0] || "?").toUpperCase();
+  const since = user && user.created_at ? new Date(user.created_at).toLocaleDateString("pt-BR") : "";
+  const syncNow = async () => {
+    setBusy(true); setStatus("");
+    try {
+      const rows = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: user.id, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+      }
+      const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" });
+      setStatus(r.error ? "Erro ao sincronizar: " + r.error.message : "\u2705 Tudo sincronizado (" + rows.length + " grupos de dados)");
+    } catch (e) { setStatus("Erro ao sincronizar."); }
+    setBusy(false);
+  };
+  const card = { background: C.surface2, border: "1.5px solid " + C.border, borderRadius: 16, padding: 16 };
+  const stat = (n, l) => React.createElement("div", { style: { flex: 1, textAlign: "center" } }, React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: C.accent } }, n), React.createElement("div", { style: { fontSize: 10, color: C.muted } }, l));
+  return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 14 } },
+    React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: C.text } }, "Perfil \u{1F464}"),
+    React.createElement("div", { style: Object.assign({}, card, { textAlign: "center", padding: 22, background: "linear-gradient(160deg,#16213E,#1A1A2E)" }) },
+      React.createElement("div", { style: { width: 76, height: 76, borderRadius: "50%", margin: "0 auto 12px", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Impact, Arial Black, sans-serif", fontSize: 34, color: "#1A1A2E", background: "linear-gradient(135deg,#E2B96F,#C9863A)", boxShadow: "0 6px 20px rgba(201,134,58,.35)" } }, initial),
+      React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: C.text, wordBreak: "break-all" } }, email),
+      since && React.createElement("div", { style: { fontSize: 11, color: C.muted, marginTop: 4 } }, "Conta criada em " + since)),
+    React.createElement("div", { style: Object.assign({}, card, { display: "flex" }) }, stat(counts.events, "Eventos"), stat(counts.tasks, "Tarefas"), stat(counts.habits, "H\u00E1bitos")),
+    React.createElement("div", { style: card },
+      React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 } }, "\u2601\uFE0F Sincroniza\u00E7\u00E3o"),
+      React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Seus dados s\u00E3o salvos automaticamente na sua conta e aparecem em qualquer aparelho em que voc\u00EA entrar."),
+      React.createElement("button", { onClick: syncNow, disabled: busy || !user, style: { width: "100%", padding: 12, borderRadius: 12, border: "1.5px solid " + C.accent, background: "transparent", color: C.accent, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", opacity: busy ? 0.6 : 1 } }, busy ? "Sincronizando..." : "Sincronizar agora"),
+      status && React.createElement("div", { style: { fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" } }, status)),
+    React.createElement("div", { style: card },
+      React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 } }, "\u{1F511} Conta"),
+      React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Ao sair, seus dados continuam salvos na nuvem. Para entrar com outra conta, saia e fa\u00E7a o login de novo."),
+      !confirmOut ? React.createElement("button", { onClick: () => setConfirmOut(true), style: { width: "100%", padding: 13, borderRadius: 12, border: "none", background: "linear-gradient(90deg,#E2B96F,#C9863A)", color: "#1A1A2E", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" } }, "Sair da conta")
+      : React.createElement("div", { style: { display: "flex", gap: 8 } },
+        React.createElement("button", { onClick: onLogout, style: { flex: 1, padding: 13, borderRadius: 12, border: "none", background: "#FF4444", color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Sim, sair"),
+        React.createElement("button", { onClick: () => setConfirmOut(false), style: { flex: 1, padding: 13, borderRadius: 12, border: "1.5px solid " + C.border, background: "transparent", color: C.text, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"))),
+    React.createElement("div", { style: { textAlign: "center", fontSize: 10, color: "#5d5a70" } }, "T\u00F4 no Corre"));
+}
 function AppInner({ onLogout }) {
   const [tab, setTab] = useState("dashboard");
   const [evModal, setEvModal] = useState({ open: false, date: null });
@@ -2636,7 +2682,8 @@ function AppInner({ onLogout }) {
     personal: /* @__PURE__ */ React.createElement(PersonalView, { habits, setHabits, bdays, setBdays }),
     analytics: /* @__PURE__ */ React.createElement(AnalyticsView, { tasks, events, habits }),
     notes: /* @__PURE__ */ React.createElement(NotesView, null),
-    pomodoro: /* @__PURE__ */ React.createElement(PomodoroView, null)
+    pomodoro: /* @__PURE__ */ React.createElement(PomodoroView, null),
+    profile: React.createElement(ProfileView, { onLogout, counts: { events: (events || []).length, tasks: (tasks || []).length, habits: (habits || []).length } })
   };
   return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans','Segoe UI',sans-serif", color: C.text, display: "flex", flexDirection: "column" } }, /* @__PURE__ */ React.createElement("link", { href: "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;800&family=Playfair+Display:wght@700;800&display=swap", rel: "stylesheet" }), /* @__PURE__ */ React.createElement("div", { style: { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "13px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: -0.3, color: "transparent" } },
         /* tô no corre logo text */
@@ -2675,7 +2722,7 @@ function AppInner({ onLogout }) {
       React.createElement("div", { style: { fontSize: 11, opacity: 0.7, margin: "3px 0 8px" } }, [sg.date ? new Date(sg.date + "T12:00").toLocaleDateString("pt-BR") : null, sg.kind === "event" ? sg.time : null, sg.source ? "via " + sg.source : null].filter(Boolean).join(" \u00B7 ") + (sg.desc ? " \u2014 " + sg.desc : "")),
       React.createElement("div", { style: { display: "flex", gap: 8 } },
         React.createElement("button", { onClick: () => resolveSug(sg, true), style: { flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: "#E2B96F", color: "#1A1A2E", fontWeight: 800, cursor: "pointer" } }, "Confirmar"),
-        React.createElement("button", { onClick: () => resolveSug(sg, false), style: { flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid #2D2D44", background: "transparent", color: "#E2B96F", cursor: "pointer" } }, "Descartar"))))), views[tab], React.createElement("div", { style: { textAlign: "center", marginTop: 24 } }, React.createElement("button", { onClick: onLogout, style: { background: "none", border: "none", color: "#8B8FAF", fontSize: 11, cursor: "pointer", textDecoration: "underline" } }, "Sair da conta"))), /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "7px 0 10px", zIndex: 100, overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: "max-content", paddingLeft: 4, paddingRight: 4 } }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: { background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "5px 10px", minWidth: 56 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: tab === t.id ? 19 : 17, filter: tab === t.id ? "none" : "grayscale(1)", transition: "all .15s" } }, t.icon), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? C.accent : C.muted, fontFamily: "inherit", whiteSpace: "nowrap" } }, t.label), tab === t.id && /* @__PURE__ */ React.createElement("div", { style: { width: 3, height: 3, borderRadius: "50%", background: C.accent } }))))), /* @__PURE__ */ React.createElement(AddEventModal, { open: evModal.open, onClose: () => setEvModal({ open: false, date: null }), onSave: (ev) => setEvents((p) => [...p, ev]), defaultDate: evModal.date }));
+        React.createElement("button", { onClick: () => resolveSug(sg, false), style: { flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid #2D2D44", background: "transparent", color: "#E2B96F", cursor: "pointer" } }, "Descartar"))))), views[tab]), /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "7px 0 10px", zIndex: 100, overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: "max-content", paddingLeft: 4, paddingRight: 4 } }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: { background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "5px 10px", minWidth: 56 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: tab === t.id ? 19 : 17, filter: tab === t.id ? "none" : "grayscale(1)", transition: "all .15s" } }, t.icon), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? C.accent : C.muted, fontFamily: "inherit", whiteSpace: "nowrap" } }, t.label), tab === t.id && /* @__PURE__ */ React.createElement("div", { style: { width: 3, height: 3, borderRadius: "50%", background: C.accent } }))))), /* @__PURE__ */ React.createElement(AddEventModal, { open: evModal.open, onClose: () => setEvModal({ open: false, date: null }), onSave: (ev) => setEvents((p) => [...p, ev]), defaultDate: evModal.date }));
 }
 function LoginScreen({ onDone }) {
   const [email, setEmail] = useState("");
@@ -2760,7 +2807,18 @@ function App() {
   useEffect(() => {
     SB.auth.getSession().then((r) => { if (r.data.session) start(r.data.session); else setState("login"); });
   }, []);
-  const logout = async () => { _sbFlush(); await SB.auth.signOut(); _sbUser = null; location.reload(); };
+  const logout = async () => {
+    try {
+      const rows = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+      }
+      if (rows.length) { const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }); if (r.error) { alert("N\u00E3o consegui salvar seus dados na nuvem. Tente de novo."); return; } }
+      Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0).forEach((k) => localStorage.removeItem(k));
+    } catch (e) {}
+    await SB.auth.signOut(); _sbUser = null; location.reload();
+  };
   if (state === "loading") return React.createElement("div", { style: { minHeight: "100vh", background: "#1A1A2E", color: "#E2B96F", display: "flex", alignItems: "center", justifyContent: "center" } }, "Carregando...");
   if (state === "error") return React.createElement("div", { style: { padding: 30, color: "#E2B96F", background: "#1A1A2E", minHeight: "100vh" } }, "Erro ao sincronizar: " + err);
   if (state === "login") return React.createElement(LoginScreen, { onDone: start });
