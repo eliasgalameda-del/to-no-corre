@@ -2684,21 +2684,24 @@ function LoginScreen({ onDone }) {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
+  const [pass2, setPass2] = useState("");
+  const [sent, setSent] = useState(false);
   const [focus, setFocus] = useState("");
   const field = (name) => ({ width: "100%", padding: "14px 14px", borderRadius: 12, border: "1.5px solid " + (focus === name ? "#E2B96F" : "#2D2D44"), background: "#1A1A2E", color: "#F3E3BD", fontSize: 15, fontFamily: "inherit", outline: "none", transition: "border-color .15s" });
   const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "#8A7560", marginBottom: 6, display: "block" };
   const go = async () => {
     if (!email || !pass) { setMsg("Preencha e-mail e senha."); return; }
     if (mode === "up" && pass.length < 6) { setMsg("A senha precisa ter pelo menos 6 caracteres."); return; }
+    if (mode === "up" && pass !== pass2) { setMsg("As senhas n\u00E3o conferem."); return; }
     setBusy(true); setMsg("");
-    const r = mode === "in" ? await SB.auth.signInWithPassword({ email: email.trim(), password: pass }) : await SB.auth.signUp({ email: email.trim(), password: pass });
+    const r = mode === "in" ? await SB.auth.signInWithPassword({ email: email.trim(), password: pass }) : await SB.auth.signUp({ email: email.trim(), password: pass, options: { emailRedirectTo: location.origin + location.pathname } });
     setBusy(false);
     if (r.error) {
       const m = r.error.message || "";
-      setMsg(/invalid login/i.test(m) ? "E-mail ou senha incorretos." : /already|uso pessoal|database error/i.test(m) ? "Este app \u00E9 de uso pessoal e j\u00E1 tem uma conta. Use \u201CEntrar\u201D." : m);
+      setMsg(/not confirmed/i.test(m) ? "Confirme seu e-mail antes de entrar. Procure a mensagem na caixa de entrada ou no spam." : /invalid login/i.test(m) ? "E-mail ou senha incorretos." : /already/i.test(m) ? "Este e-mail j\u00E1 tem conta. Use \u201CEntrar\u201D." : /rate|seconds/i.test(m) ? "Muitas tentativas. Espere um minuto e tente de novo." : m);
       return;
     }
-    if (!r.data.session) { setMsg("Conta criada! Agora toque em Entrar."); setMode("in"); return; }
+    if (!r.data.session) { setSent(true); return; }
     onDone(r.data.session);
   };
   return React.createElement("div", { style: { minHeight: "100vh", background: "radial-gradient(120% 80% at 50% 0%, #16213E 0%, #1A1A2E 55%, #0F0F1E 100%)", display: "flex", alignItems: "center", justifyContent: "center", padding: 22, fontFamily: "'DM Sans','Segoe UI',sans-serif" } },
@@ -2707,7 +2710,11 @@ function LoginScreen({ onDone }) {
         React.createElement("div", { style: { fontFamily: "Impact, Arial Black, sans-serif", fontWeight: 900, fontSize: 26, letterSpacing: 2, background: "linear-gradient(90deg,#E2B96F,#C9863A)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "t\u00F4 no"),
         React.createElement("div", { style: { fontFamily: "Impact, Arial Black, sans-serif", fontWeight: 900, fontSize: 52, letterSpacing: 4, background: "linear-gradient(90deg,#5B9BD5,#0F3460)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "CORRE"),
         React.createElement("div", { style: { fontSize: 13, color: "#8A7560", marginTop: 8 } }, "Sua agenda, no seu tempo!")),
-      React.createElement("div", { style: { background: "#16213E", border: "1px solid #2D2D44", borderRadius: 20, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.45)" } },
+      sent ? React.createElement("div", { style: { background: "#16213E", border: "1px solid #2D2D44", borderRadius: 20, padding: 26, textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,.45)" } },
+        React.createElement("div", { style: { fontSize: 46, marginBottom: 10 } }, "\u{1F4E7}"),
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 19, color: "#E2B96F", marginBottom: 8 } }, "Confirme seu e-mail"),
+        React.createElement("div", { style: { fontSize: 13.5, color: "#C9B58A", lineHeight: 1.5 } }, "Enviamos um link para ", React.createElement("b", null, email), ". Toque nele e depois volte aqui para entrar. Se n\u00E3o achar, olhe o spam."),
+        React.createElement("button", { onClick: () => { setSent(false); setMode("in"); setPass(""); setPass2(""); }, style: { width: "100%", marginTop: 20, padding: 14, borderRadius: 12, border: "none", background: "linear-gradient(90deg,#E2B96F,#C9863A)", color: "#1A1A2E", fontWeight: 800, fontSize: 15, cursor: "pointer" } }, "J\u00E1 confirmei, entrar")) : React.createElement("div", { style: { background: "#16213E", border: "1px solid #2D2D44", borderRadius: 20, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.45)" } },
         React.createElement("div", { style: { fontWeight: 800, fontSize: 18, color: "#E2B96F", marginBottom: 18 } }, mode === "in" ? "Bem-vindo de volta \u{1F44B}" : "Criar sua conta"),
         React.createElement("label", { style: lbl }, "E-mail"),
         React.createElement("input", { style: field("e"), type: "email", placeholder: "voce@email.com", value: email, autoCapitalize: "none", autoComplete: "email", onFocus: () => setFocus("e"), onBlur: () => setFocus(""), onChange: (e) => setEmail(e.target.value) }),
@@ -2716,6 +2723,9 @@ function LoginScreen({ onDone }) {
         React.createElement("div", { style: { position: "relative" } },
           React.createElement("input", { style: Object.assign(field("p"), { paddingRight: 48 }), type: show ? "text" : "password", placeholder: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022", value: pass, autoComplete: mode === "in" ? "current-password" : "new-password", onFocus: () => setFocus("p"), onBlur: () => setFocus(""), onChange: (e) => setPass(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") go(); } }),
           React.createElement("div", { onClick: () => setShow(!show), style: { position: "absolute", right: 0, top: 0, bottom: 0, width: 46, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 18, opacity: 0.8 } }, show ? "\u{1F648}" : "\u{1F441}\uFE0F")),
+        mode === "up" && React.createElement("div", { style: { marginTop: 14 } },
+          React.createElement("label", { style: lbl }, "Confirmar senha"),
+          React.createElement("input", { style: field("p2"), type: show ? "text" : "password", placeholder: "Repita a senha", value: pass2, autoComplete: "new-password", onFocus: () => setFocus("p2"), onBlur: () => setFocus(""), onChange: (e) => setPass2(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") go(); } })),
         msg && React.createElement("div", { style: { marginTop: 14, padding: "10px 12px", borderRadius: 10, background: "rgba(255,140,0,.12)", border: "1px solid rgba(255,140,0,.35)", color: "#FFB45A", fontSize: 12.5 } }, msg),
         React.createElement("button", { onClick: go, disabled: busy, style: { width: "100%", marginTop: 20, padding: 15, borderRadius: 12, border: "none", background: "linear-gradient(90deg,#E2B96F,#C9863A)", color: "#1A1A2E", fontWeight: 800, fontSize: 16, cursor: "pointer", opacity: busy ? 0.6 : 1, boxShadow: "0 6px 18px rgba(201,134,58,.35)" } }, busy ? "Aguarde..." : mode === "in" ? "Entrar" : "Criar conta"),
         React.createElement("div", { onClick: () => { setMode(mode === "in" ? "up" : "in"); setMsg(""); }, style: { textAlign: "center", marginTop: 16, fontSize: 13, color: "#8A7560", cursor: "pointer" } }, mode === "in" ? "Primeira vez? " : "J\u00E1 tem conta? ", React.createElement("span", { style: { color: "#E2B96F", fontWeight: 700 } }, mode === "in" ? "Criar conta" : "Entrar"))),
