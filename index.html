@@ -2596,6 +2596,27 @@ function ProfileView({ onLogout, counts }) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmOut, setConfirmOut] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [delStep, setDelStep] = useState(0);
+  const [delText, setDelText] = useState("");
+  const [delMsg, setDelMsg] = useState("");
+  const savePw = async () => {
+    if (pw1.length < 6) { setPwMsg("A senha precisa ter pelo menos 6 caracteres."); return; }
+    if (pw1 !== pw2) { setPwMsg("As senhas n\u00E3o conferem."); return; }
+    const r = await SB.auth.updateUser({ password: pw1 });
+    if (r.error) { setPwMsg(r.error.message); return; }
+    setPwMsg("\u2705 Senha alterada!"); setPw1(""); setPw2("");
+  };
+  const deleteAccount = async () => {
+    setDelMsg("Excluindo...");
+    const r = await SB.rpc("delete_my_account");
+    if (r.error) { setDelMsg("Erro: " + r.error.message); return; }
+    try { Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0).forEach((k) => localStorage.removeItem(k)); } catch (e) {}
+    await SB.auth.signOut(); location.reload();
+  };
   useEffect(() => { SB.auth.getUser().then((r) => { if (r.data && r.data.user) setUser(r.data.user); }); }, []);
   const email = user ? user.email : "...";
   const initial = (email[0] || "?").toUpperCase();
@@ -2634,6 +2655,27 @@ function ProfileView({ onLogout, counts }) {
       : React.createElement("div", { style: { display: "flex", gap: 8 } },
         React.createElement("button", { onClick: onLogout, style: { flex: 1, padding: 13, borderRadius: 12, border: "none", background: "#FF4444", color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Sim, sair"),
         React.createElement("button", { onClick: () => setConfirmOut(false), style: { flex: 1, padding: 13, borderRadius: 12, border: "1.5px solid " + C.border, background: "transparent", color: C.text, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Cancelar"))),
+    React.createElement("div", { style: card },
+      React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 } }, "\u{1F512} Seguran\u00E7a"),
+      !pwOpen ? React.createElement("button", { onClick: () => setPwOpen(true), style: { width: "100%", padding: 12, borderRadius: 12, border: "1.5px solid " + C.accent, background: "transparent", color: C.accent, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Alterar senha")
+      : React.createElement("div", null,
+        React.createElement("input", { type: "password", placeholder: "Nova senha", value: pw1, onChange: (e) => setPw1(e.target.value), style: { width: "100%", padding: 12, borderRadius: 10, border: "1.5px solid " + C.border, background: "#1A1A2E", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 8 } }),
+        React.createElement("input", { type: "password", placeholder: "Repita a nova senha", value: pw2, onChange: (e) => setPw2(e.target.value), style: { width: "100%", padding: 12, borderRadius: 10, border: "1.5px solid " + C.border, background: "#1A1A2E", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 8 } }),
+        pwMsg && React.createElement("div", { style: { fontSize: 12, color: C.muted, marginBottom: 8 } }, pwMsg),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: savePw, style: { flex: 1, padding: 12, borderRadius: 12, border: "none", background: "linear-gradient(90deg,#E2B96F,#C9863A)", color: "#1A1A2E", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Salvar"),
+          React.createElement("button", { onClick: () => { setPwOpen(false); setPwMsg(""); }, style: { flex: 1, padding: 12, borderRadius: 12, border: "1.5px solid " + C.border, background: "transparent", color: C.text, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Fechar")))),
+    React.createElement("div", { style: Object.assign({}, card, { borderColor: "#FF444455" }) },
+      React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#FF6B6B", marginBottom: 4 } }, "\u26A0\uFE0F Zona de perigo"),
+      React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Excluir a conta apaga para sempre a sua conta e todos os seus dados da nuvem: eventos, tarefas, h\u00E1bitos e sugest\u00F5es."),
+      delStep === 0 ? React.createElement("button", { onClick: () => setDelStep(1), style: { width: "100%", padding: 12, borderRadius: 12, border: "1.5px solid #FF4444", background: "transparent", color: "#FF6B6B", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Excluir minha conta")
+      : React.createElement("div", null,
+        React.createElement("div", { style: { fontSize: 12, color: C.text, marginBottom: 8 } }, "Para confirmar, digite EXCLUIR:"),
+        React.createElement("input", { value: delText, onChange: (e) => setDelText(e.target.value), placeholder: "EXCLUIR", autoCapitalize: "characters", style: { width: "100%", padding: 12, borderRadius: 10, border: "1.5px solid " + C.border, background: "#1A1A2E", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 8 } }),
+        delMsg && React.createElement("div", { style: { fontSize: 12, color: "#FFB45A", marginBottom: 8 } }, delMsg),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: deleteAccount, disabled: delText.trim().toUpperCase() !== "EXCLUIR", style: { flex: 1, padding: 12, borderRadius: 12, border: "none", background: "#FF4444", color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit", opacity: delText.trim().toUpperCase() === "EXCLUIR" ? 1 : 0.4 } }, "Excluir para sempre"),
+          React.createElement("button", { onClick: () => { setDelStep(0); setDelText(""); setDelMsg(""); }, style: { flex: 1, padding: 12, borderRadius: 12, border: "1.5px solid " + C.border, background: "transparent", color: C.text, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Cancelar")))),
     React.createElement("div", { style: { textAlign: "center", fontSize: 10, color: "#5d5a70" } }, "T\u00F4 no Corre"));
 }
 function AppInner({ onLogout }) {
