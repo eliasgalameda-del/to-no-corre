@@ -2071,7 +2071,311 @@ const SUGGESTIONS = [
   "Crie um plano de estudos para minhas provas",
   "Detecte sobrecarga na minha agenda"
 ];
-function AIAssistantView({ tasks, events, habits, subjects, setEvents, setTasks, setBdays }) {
+// ===== Bot do Tô no Corre: motor de comandos local, sem API =====
+const _bStrip = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const _bPad = (n) => (n < 10 ? "0" : "") + n;
+const _bLocal = (d) => d.getFullYear() + "-" + _bPad(d.getMonth() + 1) + "-" + _bPad(d.getDate());
+const _bAddD = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const _bDow = ["dom", "seg", "ter", "qua", "qui", "sex", "s\u00E1b"];
+const _bWdNames = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
+const _bMonNames = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const _bFmt = (iso) => { const d = new Date(iso + "T12:00"); return _bDow[d.getDay()] + " " + _bPad(d.getDate()) + "/" + _bPad(d.getMonth() + 1); };
+const _bDur = (m) => m >= 60 ? Math.floor(m / 60) + "h" + (m % 60 ? " " + (m % 60) + "min" : "") : m + "min";
+const _bSTOP = new Set("de da do das dos a o as os um uma uns umas para pra por com no na nos nas em e que meu minha meus minhas me ao aos tarefa tarefas evento eventos compromisso compromissos dia hoje amanha ontem semana mes ano esse essa este esta nesse nessa neste nesta proximo proxima passado passada ter tenho vou quero queria preciso pode favor por quais qual quando onde quanto quantas quantos tem tinha alguma algum todo toda todos todas sobre minha seja mais menos como isso aquele aquela ele ela vai foi".split(" "));
+const _bCtx = (n) => /\b(estud\w*|prova|aula|faculdade|tcc|materia|professor\w*|escola|curso|calculo|fisica|exame|semin\w*)\b/.test(n) ? "student" : /\b(reuniao|reunioes|cliente|projeto|sprint|relatorio|apresentacao|proposta|empresa|chefe|deploy|trabalho|escritorio|call|meeting)\b/.test(n) ? "professional" : "personal";
+
+function _bFindDates(n, now) {
+  const spans = [];
+  const out = { single: null, range: null, spans, label: "" };
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const take = (re, fn) => { const m = re.exec(n); if (!m) return false; spans.push([m.index, m.index + m[0].length]); fn(m); return true; };
+  const one = (d, label) => { out.single = _bLocal(d); out.label = label; };
+  const weekStart = (d) => _bAddD(d, -((d.getDay() + 6) % 7));
+  if (take(/\bdepois de amanha\b/, () => one(_bAddD(today, 2), "depois de amanh\u00E3"))) return out;
+  if (take(/\banteontem\b/, () => one(_bAddD(today, -2), "anteontem"))) return out;
+  if (take(/\bamanha\b/, () => one(_bAddD(today, 1), "amanh\u00E3"))) return out;
+  if (take(/\bhoje\b/, () => one(today, "hoje"))) return out;
+  if (take(/\bontem\b/, () => one(_bAddD(today, -1), "ontem"))) return out;
+  if (take(/\b(semana que vem|proxima semana)\b/, () => { const s = _bAddD(weekStart(today), 7); out.range = { from: _bLocal(s), to: _bLocal(_bAddD(s, 6)) }; out.label = "semana que vem"; })) return out;
+  if (take(/\bsemana passada\b/, () => { const s = _bAddD(weekStart(today), -7); out.range = { from: _bLocal(s), to: _bLocal(_bAddD(s, 6)) }; out.label = "semana passada"; })) return out;
+  if (take(/\b(essa|esta|nessa|nesta) semana\b/, () => { const e = _bAddD(weekStart(today), 6); out.range = { from: _bLocal(today), to: _bLocal(e) }; out.label = "essa semana"; })) return out;
+  if (take(/\b(mes que vem|proximo mes)\b/, () => { const f = new Date(today.getFullYear(), today.getMonth() + 1, 1); const t = new Date(today.getFullYear(), today.getMonth() + 2, 0); out.range = { from: _bLocal(f), to: _bLocal(t) }; out.label = "m\u00EAs que vem"; })) return out;
+  if (take(/\bmes passado\b/, () => { const f = new Date(today.getFullYear(), today.getMonth() - 1, 1); const t = new Date(today.getFullYear(), today.getMonth(), 0); out.range = { from: _bLocal(f), to: _bLocal(t) }; out.label = "m\u00EAs passado"; })) return out;
+  if (take(/\b(esse|este|nesse|neste) mes\b/, () => { const f = new Date(today.getFullYear(), today.getMonth(), 1); const t = new Date(today.getFullYear(), today.getMonth() + 1, 0); out.range = { from: _bLocal(f), to: _bLocal(t) }; out.label = "este m\u00EAs"; })) return out;
+  if (take(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/, (m) => { let y = m[3] ? parseInt(m[3], 10) : today.getFullYear(); if (y < 100) y += 2000; const d = new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10)); if (!m[3] && d < today) d.setFullYear(y + 1); one(d, _bFmt(_bLocal(d))); })) return out;
+  if (take(new RegExp("\\b(\\d{1,2}) de (" + _bMonNames.join("|") + ")\\b"), (m) => { let d = new Date(today.getFullYear(), _bMonNames.indexOf(m[2]), parseInt(m[1], 10)); if (d < today) d = new Date(today.getFullYear() + 1, d.getMonth(), d.getDate()); one(d, _bFmt(_bLocal(d))); })) return out;
+  if (take(/\bem (\d{1,2}) dias?\b/, (m) => one(_bAddD(today, parseInt(m[1], 10)), "em " + m[1] + " dias"))) return out;
+  if (take(/\bdia (\d{1,2})\b/, (m) => { const dd = parseInt(m[1], 10); let d = new Date(today.getFullYear(), today.getMonth(), dd); if (d < today) d = new Date(today.getFullYear(), today.getMonth() + 1, dd); one(d, _bFmt(_bLocal(d))); })) return out;
+  const wm = new RegExp("\\b(proxim[ao] |na |no |nessa |nesta |neste |esse |essa |este |esta )?(" + _bWdNames.join("|") + ")(?:-feira)?\\b").exec(n);
+  if (wm) {
+    spans.push([wm.index, wm.index + wm[0].length]);
+    const wd = _bWdNames.indexOf(wm[2]);
+    let off = (wd - today.getDay() + 7) % 7;
+    if (off === 0 && /proxim/.test(wm[1] || "")) off = 7;
+    one(_bAddD(today, off), _bFmt(_bLocal(_bAddD(today, off))));
+    out.weekday = wd;
+  }
+  return out;
+}
+
+function _bFindTime(n, spans) {
+  let h = null, mi = 0, m;
+  if ((m = /\b(\d{1,2}):(\d{2})\b/.exec(n))) { h = +m[1]; mi = +m[2]; spans.push([m.index, m.index + m[0].length]); }
+  else if ((m = /\b(\d{1,2})\s*h(?:oras?)?\s*(\d{2})?\b/.exec(n))) { h = +m[1]; mi = m[2] ? +m[2] : 0; spans.push([m.index, m.index + m[0].length]); }
+  else if ((m = /\bas (\d{1,2})(?:\s*horas?)?\b/.exec(n))) { h = +m[1]; spans.push([m.index, m.index + m[0].length]); }
+  else if ((m = /\bmeio[- ]dia\b/.exec(n))) { h = 12; spans.push([m.index, m.index + m[0].length]); }
+  else if ((m = /\bmeia[- ]noite\b/.exec(n))) { h = 0; spans.push([m.index, m.index + m[0].length]); }
+  if (h === null || h > 23 || mi > 59) return null;
+  const pm = /\b(da|de|a) (manha|tarde|noite)\b/.exec(n);
+  if (pm) { spans.push([pm.index, pm.index + pm[0].length]); if ((pm[2] === "tarde" || pm[2] === "noite") && h < 12) h += 12; }
+  return _bPad(h) + ":" + _bPad(mi);
+}
+
+function _bKeywords(n, spans) {
+  let s = n.split("");
+  spans.forEach(([a, b]) => { for (let i = a; i < b; i++) s[i] = " "; });
+  return s.join("").split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !_bSTOP.has(w) && !/^(cri[ae]\w*|adicion\w*|agend\w*|marc\w*|lanc\w*|anot\w*|coloc\w*|cancel\w*|apag\w*|remov\w*|exclu\w*|delet\w*|desmarc\w*|conclu\w*|termin\w*|finaliz\w*|remarc\w*|reagend\w*|mud\w*|troc\w*|adi\w*)$/.test(w));
+}
+const _bStem = (w) => (w.length > 5 ? w.slice(0, 5) : w);
+const _bMatch = (title, kws) => { const t = _bStrip(title.toLowerCase()); return kws.every((k) => t.indexOf(_bStem(k)) >= 0); };
+
+function _bTitle(orig, stripped, spans) {
+  const rm = new Array(orig.length).fill(false);
+  spans.forEach(([a, b]) => { for (let i = a; i < b && i < rm.length; i++) rm[i] = true; });
+  const mark = (re) => { let m; const r = new RegExp(re.source, "g"); while ((m = r.exec(stripped))) { for (let i = m.index; i < m.index + m[0].length; i++) rm[i] = true; if (m[0].length === 0) r.lastIndex++; } };
+  mark(/^(?:(?:por favor|pf|pode|poderia|consegue|quero|queria|gostaria de|vou|preciso|me)\s+)*(?:cri[ae]\w*|adicion\w*|agend\w*|marc(?:a|ar|e)|lanc\w*|anot\w*|coloc\w*|inclu\w*|add|nov[oa]|registr\w*|lembr\w+)\b/);
+  mark(/\b(tarefa|evento|compromisso|lembrete|aniversario|niver)s?\b(?:\s*:)?/);
+  mark(/\b(todo dia|todos os dias|diariamente|toda semana|todas as semanas|semanalmente|todo mes|mensalmente|toda (?:segunda|terca|quarta|quinta|sexta|sabado|domingo)(?:-feira)?)\b/);
+  mark(/\bpor \d+\s*(?:h|horas?|min|minutos?)\b/);
+  mark(/\b(urgente|prioridade (?:alta|baixa)|alta prioridade|baixa prioridade|importante|sem pressa)\b/);
+  mark(/\b(tenho que|ter que|tenho|terei|vou ter|marquei|marcaram|para|pra|que)\b/);
+  let t = orig.split("").map((c, i) => (rm[i] ? " " : c)).join("");
+  t = t.replace(/[,;:\-\u2013]+/g, " ").replace(/\s+/g, " ").trim();
+  t = t.replace(/^(?:(?:de|do|da|o|a|um|uma|as|\u00E0s|em|no|na|dia|para|pra|que|e)\s+)+/i, "").replace(/(?:\s+(?:de|do|da|o|a|as|\u00E0s|em|no|na|dia|para|pra|e))+$/i, "").trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
+}
+
+function _bExpand(events, now) {
+  const base = typeof expandRecurring === "function" ? expandRecurring(events) : events;
+  return base;
+}
+
+function tncBot(msgRaw, data, pending, nowArg) {
+  const now = nowArg || new Date();
+  const todayIso = _bLocal(now);
+  const msg = msgRaw.trim();
+  const n = _bStrip(msg.toLowerCase());
+  const events = data.events || [], tasks = data.tasks || [], habits = data.habits || [], subjects = data.subjects || [], bdays = data.bdays || [];
+  const R = (reply, extra) => Object.assign({ reply, actions: [], pending: null }, extra || {});
+  const dts = _bFindDates(n, now);
+  const spans = dts.spans.slice();
+  const time = _bFindTime(n, spans);
+  const isQuestion = /\?|\b(quais|qual|quando|quanto|quantos|quantas|o que|que horas|tem algo|tenho algo|tenho alguma|mostr\w*|lista\w*|ver)\b/.test(n);
+  const evLine = (e) => "\u2022 " + (e.time && e.time !== "00:00" ? e.time + " " : "") + e.title + (e.duration > 0 ? " (" + _bDur(e.duration) + ")" : "") + (e.recurrence && e.recurrence !== "none" ? " \u{1F501}" : "");
+  const PRIL = { urgent: "Urgente", high: "Alta", medium: "M\u00E9dia", low: "Baixa" };
+  const tkLine = (t) => "\u2022 " + t.title + (t.deadline ? " \u2014 " + _bFmt(t.deadline) : "") + " \u00B7 " + (PRIL[t.priority] || "M\u00E9dia") + (t.status === "doing" ? " \u00B7 em andamento" : t.status === "done" ? " \u00B7 \u2705" : "");
+
+  // ---------- pendencia (esclarecimentos) ----------
+  if (pending) {
+    if (pending.kind === "choose") {
+      let picks = [];
+      if (/\b(todos|todas|tudo)\b/.test(n)) picks = pending.opts;
+      else { const num = /\b(\d{1,2})\b/.exec(n); const ord = ["primeir", "segund", "terceir", "quart", "quint"].findIndex((o) => n.indexOf(o) >= 0); const i = num ? +num[1] - 1 : ord; if (i >= 0 && pending.opts[i]) picks = [pending.opts[i]]; }
+      if (picks.length) return applyChoice(pending.action, picks, pending);
+      if (/\b(nao|deixa|esquece|cancela|nenhum)\b/.test(n)) return R("Beleza, n\u00E3o mexi em nada. \u{1F44D}");
+    }
+    if (pending.kind === "add") {
+      const d2 = _bFindDates(n, now); const sp2 = d2.spans.slice(); const t2 = _bFindTime(n, sp2);
+      if (d2.single || t2) {
+        const p = Object.assign({}, pending.item);
+        if (d2.single) p.date = d2.single;
+        if (t2) p.time = t2;
+        return finishAdd(p);
+      }
+    }
+  }
+
+  function applyChoice(action, picks, pend) {
+    const acts = []; const lines = [];
+    picks.forEach((o) => {
+      if (action === "cancel") { acts.push({ type: o.type === "event" ? "delEvent" : "delTask", id: o.id }); lines.push("\u{1F5D1}\uFE0F **" + o.label + "**"); }
+      if (action === "done") { acts.push({ type: "doneTask", id: o.id }); lines.push("\u2705 **" + o.label + "**"); }
+      if (action === "move") { acts.push(Object.assign({ type: o.type === "event" ? "moveEvent" : "moveTask", id: o.id }, pend.change)); lines.push("\u{1F4C5} **" + o.label + "**"); }
+    });
+    const head = action === "cancel" ? "Cancelado:" : action === "done" ? "Conclu\u00EDda:" : "Remarcado:";
+    return R(head + "\n" + lines.join("\n"), { actions: acts });
+  }
+
+  function finishAdd(it) {
+    if (it.type === "event") {
+      const noTime = !it.time;
+      const ev = { id: uid(), title: it.title, date: it.date, time: it.time || "09:00", duration: it.duration || 60, context: it.context, recurrence: it.recurrence || "none", desc: "", color: (CTX[it.context] || CTX.personal).main, done: false };
+      let warn = "";
+      const sameDay = _bExpand(events, now).filter((e) => e.date === ev.date && e.duration > 0 && !e.done);
+      const toMin = (t) => { const [h, m] = t.split(":"); return +h * 60 + +m; };
+      const clash = sameDay.find((e) => toMin(ev.time) < toMin(e.time) + e.duration && toMin(e.time) < toMin(ev.time) + ev.duration);
+      if (clash) warn = "\n\u26A0\uFE0F Aten\u00E7\u00E3o: conflita com **" + clash.title + "** (" + clash.time + ").";
+      return R("\u{1F4C5} Evento criado: **" + ev.title + "**\n" + _bFmt(ev.date) + " \u00E0s " + ev.time + (noTime ? " (sem hor\u00E1rio, coloquei 09:00)" : "") + (ev.recurrence !== "none" ? " \u{1F501} " + ({ daily: "todo dia", weekly: "toda semana", monthly: "todo m\u00EAs" })[ev.recurrence] : "") + warn, { actions: [{ type: "addEvent", ev }], created: [{ icon: "\u{1F4C5}", label: ev.title, sub: _bFmt(ev.date) + " " + ev.time }] });
+    }
+    if (it.type === "task") {
+      const tk = { id: uid(), title: it.title, context: it.context, priority: it.priority || "medium", status: "todo", deadline: it.date || "", tags: [], estimateMins: 30, loggedMins: 0, recurrence: it.recurrence || "none", dependsOn: [], subtasks: [] };
+      return R("\u2705 Tarefa criada: **" + tk.title + "**\n" + (tk.deadline ? "Prazo: " + _bFmt(tk.deadline) + " \u00B7 " : "Sem prazo \u00B7 ") + PRIL[tk.priority], { actions: [{ type: "addTask", tk }], created: [{ icon: "\u2705", label: tk.title, sub: PRIL[tk.priority] }] });
+    }
+    return R("N\u00E3o consegui montar isso. Tente: \u201Ccriar tarefa estudar c\u00E1lculo sexta\u201D.");
+  }
+
+  // ---------- ajuda / saudacao ----------
+  if (/\b(ajuda|help|comandos|o que (voce|vc) (faz|sabe|consegue))\b/.test(n)) {
+    return R("Eu cuido de tudo do app. Exemplos:\n\u2022 **O que tenho hoje / amanh\u00E3 / essa semana?**\n\u2022 **Pr\u00F3ximo compromisso**\n\u2022 **Tarefas pendentes / atrasadas / conclu\u00EDdas**\n\u2022 **Criar evento dentista sexta 15h**\n\u2022 **Criar tarefa entregar relat\u00F3rio dia 30 urgente**\n\u2022 **Todo dia academia 7h** (evento recorrente)\n\u2022 **Cancelar dentista** / **Concluir relat\u00F3rio**\n\u2022 **Remarcar dentista para segunda 10h**\n\u2022 **Quando \u00E9 a prova de c\u00E1lculo?**\n\u2022 **H\u00E1bitos**, **faltas e notas**, **anivers\u00E1rios**, **resumo**");
+  }
+
+  // ---------- cancelar ----------
+  if (/\b(cancel\w*|apag\w*|remov\w*|exclu\w*|delet\w*|desmarc\w*)\b/.test(n) && !/\b(quais|quantos)\b/.test(n)) {
+    const kws = _bKeywords(n, spans);
+    const wantTask = /\btarefa/.test(n), wantEv = /\b(evento|compromisso|reuniao)/.test(n);
+    const opts = [];
+    const exp = events.filter((e) => !e.done);
+    if (!wantTask) exp.forEach((e) => { if (kws.length || dts.single) { if (_bMatch(e.title, kws) && (!dts.single || e.date === dts.single)) opts.push({ type: "event", id: e.id, label: e.title + " (" + _bFmt(e.date) + (e.time && e.time !== "00:00" ? " " + e.time : "") + ")" }); } });
+    if (!wantEv) tasks.forEach((t) => { if (kws.length || dts.single) { if (_bMatch(t.title, kws) && (!dts.single || t.deadline === dts.single)) opts.push({ type: "task", id: t.id, label: t.title + (t.deadline ? " (" + _bFmt(t.deadline) + ")" : "") }); } });
+    if (!kws.length && !dts.single) return R("O que voc\u00EA quer cancelar? Diga o nome, por exemplo: \u201Ccancelar dentista\u201D.");
+    if (!opts.length) return R("N\u00E3o encontrei nada com isso. \u{1F50D} Diga o nome do compromisso ou da tarefa como est\u00E1 no app.");
+    if (opts.length === 1) return applyChoice("cancel", opts, {});
+    return R("Achei mais de um. Qual cancelo? (responda o n\u00FAmero, ou **todos**)\n" + opts.map((o, i) => (i + 1) + ". " + o.label).join("\n"), { pending: { kind: "choose", action: "cancel", opts } });
+  }
+
+  // ---------- remarcar ----------
+  if (/\b(remarc\w*|reagend\w*|adiar|adie|adiei|mude|mudar|troque|trocar|mover|mova)\b/.test(n) && (dts.single || time)) {
+    const kws = _bKeywords(n, spans);
+    const opts = [];
+    events.forEach((e) => { if (kws.length && _bMatch(e.title, kws)) opts.push({ type: "event", id: e.id, label: e.title + " (" + _bFmt(e.date) + ")" }); });
+    tasks.forEach((t) => { if (kws.length && _bMatch(t.title, kws) && /\btarefa/.test(n)) opts.push({ type: "task", id: t.id, label: t.title }); });
+    if (!opts.length) return R("N\u00E3o achei o que remarcar. Diga assim: \u201Cremarcar dentista para segunda 10h\u201D.");
+    const change = { date: dts.single || null, time: time || null };
+    if (opts.length === 1) return applyChoice("move", opts, { change });
+    return R("Achei mais de um. Qual remarco? (n\u00FAmero)\n" + opts.map((o, i) => (i + 1) + ". " + o.label).join("\n"), { pending: { kind: "choose", action: "move", opts, change } });
+  }
+
+  // ---------- concluir tarefa ----------
+  if (/\b(conclu\w*|termin\w*|finaliz\w*|fiz|feito|completei)\b/.test(n) && !/\b(quais|quantas|quantos|lista|mostr\w*|minhas|ver)\b/.test(n) && !/\?/.test(n)) {
+    const kws = _bKeywords(n, spans);
+    if (kws.length) {
+      const opts = tasks.filter((t) => t.status !== "done" && _bMatch(t.title, kws)).map((t) => ({ type: "task", id: t.id, label: t.title }));
+      if (!opts.length) return R("N\u00E3o achei tarefa pendente com isso. \u{1F50D}");
+      if (opts.length === 1) return applyChoice("done", opts, {});
+      return R("Achei mais de uma. Qual concluo? (n\u00FAmero, ou **todos**)\n" + opts.map((o, i) => (i + 1) + ". " + o.label).join("\n"), { pending: { kind: "choose", action: "done", opts } });
+    }
+  }
+
+  // ---------- criar ----------
+  const addCmd = /^(?:(?:por favor|pf|pode|poderia|consegue|quero|queria|gostaria de|vou|preciso|me)\s+)*(cri[ae]\w*|adicion\w*|agend\w*|marc(?:a|ar|e)\b|lanc\w*|anot\w*|coloc\w*|inclu\w*|add\b|nov[oa]\b|registr\w*)/.test(n);
+  const stmt = /^(tenho|terei|vou ter|marquei|marcaram|tem)\b/.test(n) && (dts.single || time) && !isQuestion;
+  const todoStmt = /^(preciso|tenho que|ter que|lembrar de|lembra de|lembre de|me lembra)\b/.test(n) && !isQuestion;
+  const recur = /\b(todo dia|todos os dias|diariamente)\b/.test(n) ? "daily" : /\b(toda semana|todas as semanas|semanalmente|toda (segunda|terca|quarta|quinta|sexta|sabado|domingo))/.test(n) ? "weekly" : /\b(todo mes|mensalmente)\b/.test(n) ? "monthly" : "none";
+  if ((addCmd || stmt || todoStmt || recur !== "none") && !(isQuestion && !addCmd)) {
+    const everyWd = new RegExp("\\btoda (" + _bWdNames.join("|") + ")").exec(n);
+    let date = dts.single;
+    if (!date && everyWd) { const wd = _bWdNames.indexOf(everyWd[1]); date = _bLocal(_bAddD(new Date(now.getFullYear(), now.getMonth(), now.getDate()), (wd - now.getDay() + 7) % 7)); }
+    if (!date && recur === "daily") date = todayIso;
+    const dur = (() => { const m = /\bpor (\d+)\s*(h|horas?|min|minutos?)\b/.exec(n); if (!m) return 60; return /^h/.test(m[2]) ? +m[1] * 60 : +m[1]; })();
+    const title = _bTitle(msg, n, spans);
+    if (!title) return R("Qual o t\u00EDtulo? Ex.: \u201Ccriar evento dentista sexta 15h\u201D.");
+    const pri = /\burgent\w*/.test(n) ? "urgent" : /\b(importante|prioridade alta|alta prioridade)\b/.test(n) ? "high" : /\b(baixa prioridade|prioridade baixa|sem pressa)\b/.test(n) ? "low" : "medium";
+    const ctx = _bCtx(n);
+    if (/\b(aniversario|niver)\b/.test(n)) {
+      if (!date) return R("Qual a data do anivers\u00E1rio? Ex.: \u201Ccriar anivers\u00E1rio da Ana 15/03\u201D.");
+      const name = title.replace(/^(da|do|de)\s+/i, "");
+      return R("\u{1F382} Anivers\u00E1rio salvo: **" + name + "** em " + _bFmt(date), { actions: [{ type: "addBday", b: { id: uid(), name, date, reminder: 7 } }], created: [{ icon: "\u{1F382}", label: name, sub: _bFmt(date) }] });
+    }
+    const taskWord = /\b(tarefa|task|to-do|todo|lembrete|lembrar|lembra)\b/.test(n) || todoStmt;
+    const eventWord = /\b(evento|compromisso|reuniao|consulta|prova|aula|encontro|entrevista|dentista|medico|jantar|almoco|treino|academia|apresentacao|show|festa|viagem|voo|call|exame)\b/.test(n);
+    let type = taskWord && !(time && eventWord) ? "task" : (eventWord || time || recur !== "none") ? "event" : date ? "event" : "task";
+    if (type === "event" && !date) return R("Para qual dia? \u{1F4C5} (ex.: amanh\u00E3, sexta, 15/12)", { pending: { kind: "add", item: { type, title, context: ctx, time, duration: dur, recurrence: recur, priority: pri } } });
+    return finishAdd({ type, title, context: ctx, date, time, duration: dur, recurrence: recur, priority: pri });
+  }
+
+  // ---------- consultas ----------
+  const range = dts.range || (dts.single ? { from: dts.single, to: dts.single } : null);
+  const rangeLabel = dts.label || "hoje";
+  const agendaFor = (r, label) => {
+    const exp = _bExpand(events, now).filter((e) => e.date >= r.from && e.date <= r.to && !e.done).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    const tk = tasks.filter((t) => t.deadline && t.deadline >= r.from && t.deadline <= r.to && t.status !== "done");
+    const pend = (data.sugs || []).length;
+    if (!exp.length && !tk.length) return "\u{1F4C5} Nada marcado para **" + label + "**." + (pend ? "\n\u{1F916} Tem " + pend + " sugest\u00E3o(\u00F5es) aguardando sua confirma\u00E7\u00E3o." : "");
+    const days = {};
+    exp.forEach((e) => { (days[e.date] = days[e.date] || []).push(e); });
+    let out = "\u{1F4C5} **" + label.charAt(0).toUpperCase() + label.slice(1) + "**";
+    const keys = Object.keys(days).sort();
+    if (r.from === r.to) { out += (keys.length ? "\n" + days[keys[0]].map(evLine).join("\n") : ""); }
+    else keys.forEach((k) => { out += "\n\n**" + _bFmt(k) + "**\n" + days[k].map(evLine).join("\n"); });
+    if (tk.length) out += "\n\n\u2705 **Tarefas com prazo:**\n" + tk.slice(0, 10).map(tkLine).join("\n");
+    if (pend) out += "\n\n\u{1F916} " + pend + " sugest\u00E3o(\u00F5es) aguardando confirma\u00E7\u00E3o.";
+    return out;
+  };
+
+  if (/^(oi|ola|e ai|eai|opa|bom dia|boa tarde|boa noite)\b/.test(n) && n.length < 25) {
+    return R("Oi! \u{1F44B} Aqui \u00E9 o bot do Tô no Corre.\n\n" + agendaFor({ from: todayIso, to: todayIso }, "hoje"));
+  }
+  if (/\b(resumo|panorama|visao geral)\b/.test(n)) {
+    const od = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline < todayIso).length;
+    const op = tasks.filter((t) => t.status !== "done").length;
+    const exp = _bExpand(events, now).filter((e) => e.date === todayIso && !e.done).length;
+    return R("\u{1F4CA} **Resumo**\n\u2022 Hoje: " + exp + " compromisso(s)\n\u2022 Tarefas pendentes: " + op + (od ? " (\u26A0\uFE0F " + od + " atrasada(s))" : "") + "\n\u2022 H\u00E1bitos: " + habits.length + "\n\u2022 Mat\u00E9rias: " + subjects.length);
+  }
+  if (/\bproxim[oa]s? (compromisso|evento|reuniao|prova|aula|tarefa)\b/.test(n)) {
+    if (/tarefa/.test(n)) { const t = tasks.filter((x) => x.status !== "done" && x.deadline && x.deadline >= todayIso).sort((a, b) => a.deadline.localeCompare(b.deadline))[0]; return R(t ? "\u2705 Pr\u00F3xima tarefa: **" + t.title + "** \u2014 " + _bFmt(t.deadline) : "Nenhuma tarefa com prazo pela frente. \u{1F389}"); }
+    const nowT = _bPad(now.getHours()) + ":" + _bPad(now.getMinutes());
+    const e = _bExpand(events, now).filter((x) => !x.done && (x.date > todayIso || (x.date === todayIso && x.time >= nowT))).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
+    return R(e ? "\u{1F4C5} Pr\u00F3ximo: **" + e.title + "** \u2014 " + _bFmt(e.date) + (e.time && e.time !== "00:00" ? " \u00E0s " + e.time : "") : "Nenhum compromisso pela frente. \u{1F389}");
+  }
+  if (/\bhabit\w*/.test(n)) {
+    if (!habits.length) return R("Voc\u00EA ainda n\u00E3o tem h\u00E1bitos cadastrados.");
+    return R("\u{1F4AA} **H\u00E1bitos**\n" + habits.map((h) => "\u2022 " + (h.icon || "") + " " + h.title + " \u2014 sequ\u00EAncia " + (h.streak || 0) + " dia(s), meta " + (h.goal || "-")).join("\n"));
+  }
+  if (/\b(materia\w*|faltas?|notas?|media|disciplina\w*|professor\w*)\b/.test(n) && subjects.length) {
+    const kws = _bKeywords(n, []).filter((w) => !/^(faltas?|notas?|media|materias?|disciplinas?|professor\w*|quantas?|quantos?|tenho|minha|minhas)$/.test(w));
+    const list = kws.length ? subjects.filter((s) => _bMatch(s.title, kws)) : subjects;
+    return R("\u{1F393} **Estudos**\n" + (list.length ? list : subjects).map((s) => { const g = s.grades || []; const av = g.length ? (g.reduce((a, b) => a + b, 0) / g.length).toFixed(1) : "--"; return "\u2022 " + s.title + " \u2014 m\u00E9dia " + av + ", faltas " + (s.absences || 0) + "/" + (s.maxAbsences || "-") + (s.professor ? " \u00B7 " + s.professor : ""); }).join("\n"));
+  }
+  if (/\b(aniversari\w*|niver\w*)\b/.test(n)) {
+    if (!bdays.length) return R("Nenhum anivers\u00E1rio cadastrado.");
+    const nxt = bdays.map((b) => { const d = new Date(b.date + "T12:00"); let nd = new Date(now.getFullYear(), d.getMonth(), d.getDate()); if (_bLocal(nd) < todayIso) nd = new Date(now.getFullYear() + 1, d.getMonth(), d.getDate()); return { b, iso: _bLocal(nd) }; }).sort((a, b) => a.iso.localeCompare(b.iso)).slice(0, 5);
+    return R("\u{1F382} **Pr\u00F3ximos anivers\u00E1rios**\n" + nxt.map((x) => "\u2022 " + x.b.name + " \u2014 " + _bFmt(x.iso)).join("\n"));
+  }
+  if (/\btarefa\w*|\b(pendente\w*|atrasad\w*|vencid\w*|concluid\w*|a fazer|em andamento)\b/.test(n)) {
+    let list = tasks, title = "Tarefas";
+    if (/\b(atrasad\w*|vencid\w*|passou|passada|passaram)\b/.test(n)) { list = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline < todayIso); title = "Tarefas atrasadas"; }
+    else if (/\b(concluid\w*|feitas?|completas?|finalizad\w*)\b/.test(n)) { list = tasks.filter((t) => t.status === "done"); title = "Tarefas conclu\u00EDdas"; }
+    else if (/\burgent\w*/.test(n)) { list = tasks.filter((t) => t.status !== "done" && t.priority === "urgent"); title = "Tarefas urgentes"; }
+    else if (/\bandamento\b/.test(n)) { list = tasks.filter((t) => t.status === "doing"); title = "Em andamento"; }
+    else list = tasks.filter((t) => t.status !== "done");
+    if (range) { list = list.filter((t) => t.deadline && t.deadline >= range.from && t.deadline <= range.to); title += " (" + rangeLabel + ")"; }
+    const kws = _bKeywords(n, spans).filter((w) => !/^(pendentes?|atrasad\w*|vencid\w*|concluid\w*|feitas?|completas?|finalizad\w*|urgentes?|andamento|fazer|quais|minhas|lista\w*|mostr\w*|passou|passada|passaram|tenho)$/.test(w));
+    if (kws.length) list = list.filter((t) => _bMatch(t.title, kws));
+    list = list.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
+    if (!list.length) return R("\u2705 **" + title + "**: nenhuma. \u{1F389}");
+    return R("\u2705 **" + title + "** (" + list.length + ")\n" + list.slice(0, 15).map(tkLine).join("\n") + (list.length > 15 ? "\n... e mais " + (list.length - 15) : ""));
+  }
+  if (/\b(compromisso\w*|evento\w*|agenda|reuniao|reunioes|marcado|programad\w*|o que (eu )?tenho|tenho (algo|alguma))\b/.test(n) || (range && !addCmd)) {
+    const kws = _bKeywords(n, spans).filter((w) => !/^(agenda|marcado|programad\w*|reunioes|quais|minha|minhas|lista\w*|mostr\w*|tenho|algo|alguma|coisa)$/.test(w));
+    if (kws.length && !/\b(o que|quais)\b/.test(n)) { /* cai na busca abaixo */ }
+    else {
+      const r = range || { from: todayIso, to: todayIso };
+      return R(agendaFor(r, rangeLabel));
+    }
+  }
+  // ---------- busca por palavra ----------
+  const kws = _bKeywords(n, spans).filter((w) => !/^(quando|onde|qual|quais|que|horas|marcado|tenho|marcada|sera|fica|vai|quanto)$/.test(w));
+  if (kws.length) {
+    const evs = _bExpand(events, now).filter((e) => _bMatch(e.title, kws) && !e.done && !e._virtual || (_bMatch(e.title, kws) && e._virtual && e.date >= todayIso));
+    const seen = {}; const evl = evs.filter((e) => { const k = e.title + e.date; if (seen[k]) return false; seen[k] = 1; return true; }).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).slice(0, 8);
+    const tl = tasks.filter((t) => _bMatch(t.title, kws));
+    if (evl.length || tl.length) return R("\u{1F50E} Achei:" + (evl.length ? "\n\n\u{1F4C5} **Compromissos**\n" + evl.map((e) => "\u2022 " + e.title + " \u2014 " + _bFmt(e.date) + (e.time && e.time !== "00:00" ? " \u00E0s " + e.time : "")).join("\n") : "") + (tl.length ? "\n\n\u2705 **Tarefas**\n" + tl.slice(0, 8).map(tkLine).join("\n") : ""));
+  }
+  return R("N\u00E3o entendi bem. \u{1F914} Eu respondo e fa\u00E7o coisas do app, como \u201Co que tenho amanh\u00E3?\u201D, \u201Ctarefas atrasadas\u201D ou \u201Ccriar tarefa estudar sexta\u201D. Diga **ajuda** para ver tudo.");
+}
+
+function AIAssistantView({ tasks, events, habits, subjects, bdays, sugs, setEvents, setTasks, setBdays }) {
+  const pendingRef = useRef(null);
   const [aiName, setAiName] = usePersist("ai_name", "");
   const [userName, setUserName] = usePersist("ai_user", "");
   const [convs, setConvs] = usePersist("ai_convs", []);
@@ -2247,35 +2551,19 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
     setMessages((p) => [...p, { role: "user", content: msg }]);
     setLoading(true);
     try {
-      const apiMsgs = messages.filter((_, i) => i > 0).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: typeof m.content === "string" ? m.content : "" })).filter((m) => m.content.trim()).concat({ role: "user", content: msg });
-      const GROQ_KEY = "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";
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + GROQ_KEY },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          max_tokens: 1024,
-          messages: [{ role: "system", content: buildSystemPrompt() }, ...apiMsgs]
-        })
+      const res = tncBot(msg, { events, tasks, habits, subjects, bdays: bdays || [], sugs: sugs || [] }, pendingRef.current);
+      pendingRef.current = res.pending || null;
+      (res.actions || []).forEach((a) => {
+        if (a.type === "addEvent") setEvents((p) => [...p, a.ev]);
+        else if (a.type === "addTask") setTasks((p) => [...p, a.tk]);
+        else if (a.type === "addBday") setBdays((p) => [...p, a.b]);
+        else if (a.type === "delEvent") { const bid = String(a.id).split("_v")[0]; setEvents((p) => p.filter((e) => e.id !== bid)); }
+        else if (a.type === "delTask") setTasks((p) => p.filter((t) => t.id !== a.id));
+        else if (a.type === "doneTask") setTasks((p) => p.map((t) => t.id === a.id ? Object.assign({}, t, { status: "done" }) : t));
+        else if (a.type === "moveEvent") { const bid = String(a.id).split("_v")[0]; setEvents((p) => p.map((e) => e.id === bid ? Object.assign({}, e, a.date ? { date: a.date } : {}, a.time ? { time: a.time } : {}) : e)); }
+        else if (a.type === "moveTask") setTasks((p) => p.map((t) => t.id === a.id ? Object.assign({}, t, a.date ? { deadline: a.date } : {}) : t));
       });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-      const rawText = ((_c = (_b = (_a = data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content) || "";
-      let replyText = rawText, created = [];
-      const jm = rawText.match(/```json\s*([\s\S]*?)```/i) || rawText.match(/(\{"actions"[\s\S]*?\})\s*$/);
-      const js = jm ? (jm[1] || jm[0]).trim() : rawText.startsWith("{") ? rawText : null;
-      if (js) {
-        try {
-          const p = JSON.parse(js);
-          if (p.actions && Array.isArray(p.actions)) {
-            created = executeActions(p.actions);
-            replyText = p.reply || created.map((c) => `${c.icon} **${c.label}** criado!`).join("\n");
-          }
-        } catch (e) {
-          replyText = rawText;
-        }
-      }
-      setMessages((p) => [...p, { role: "assistant", content: replyText || "Feito!", created: created.length > 0 ? created : void 0 }]);
+      setMessages((p) => [...p, { role: "assistant", content: res.reply || "Feito!", created: res.created && res.created.length ? res.created : void 0 }]);
     } catch (e) {
       setMessages((p) => [...p, { role: "assistant", content: `Erro: ${e.message || "verifique sua conexao."}` }]);
     } finally {
@@ -2440,7 +2728,7 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
         fd.append("model", "whisper-large-v3");
         fd.append("language", "pt");
         try {
-          const r = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { "Authorization": "Bearer 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" }, body: fd });
+          throw new Error("sem transcricao");
           const d = await r.json();
           if (d.text) setInput((p) => p ? p + " " + d.text : d.text);
         } catch (err) {
@@ -2772,7 +3060,7 @@ function AppInner({ onLogout }) {
   if (!ready) return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, fontFamily: "'Playfair Display',serif", fontWeight: 800, background: "linear-gradient(90deg,#C9863A,#C9863A,#E2B96F)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "Agenda+"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, [0, 1, 2].map((i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { width: 8, height: 8, borderRadius: "50%", background: C.accent, animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` } }))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: C.muted } }, "Carregando seus dados..."));
   const views = {
     dashboard: /* @__PURE__ */ React.createElement(Dashboard, { events, tasks, habits, bdays }),
-    ai: /* @__PURE__ */ React.createElement(AIAssistantView, { tasks, events, habits, subjects, setEvents, setTasks, setBdays }),
+    ai: /* @__PURE__ */ React.createElement(AIAssistantView, { tasks, events, habits, subjects, bdays, sugs, setEvents, setTasks, setBdays }),
     calendar: /* @__PURE__ */ React.createElement(CalendarView, { events, setEvents, onAddEvent: (d) => setEvModal({ open: true, date: d }), bdays, uf: calUf, setUf: setCalUf }),
     tasks: /* @__PURE__ */ React.createElement(TasksView, { tasks, setTasks }),
     student: /* @__PURE__ */ React.createElement(StudentView, { subjects, setSubjects, setEvents }),
