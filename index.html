@@ -2538,6 +2538,7 @@ const TABS = [
   { id: "profile", label: "Perfil", icon: "\u{1F464}" }
 ];
 const _memCache = {};
+const _appliedInbox = {};
 function _lsGet(key) {
   try {
     const v = localStorage.getItem(key);
@@ -2691,11 +2692,23 @@ function AppInner({ onLogout }) {
   const [calUf, setCalUf] = usePersist("calendar_uf", "");
   const [sugs, setSugs] = useState([]);
   const loadSugs = useCallback(() => {
-    SB.from("agent_inbox").select("*").eq("status", "pending").order("created_at", { ascending: true }).then((r) => { if (!r.error && r.data) setSugs(r.data); });
+    SB.from("agent_inbox").select("*").in("status", ["pending", "auto"]).order("created_at", { ascending: true }).then((r) => {
+      if (r.error || !r.data) return;
+      const auto = r.data.filter((x) => x.status === "auto" && !_appliedInbox[x.id]);
+      auto.forEach((sg) => {
+        _appliedInbox[sg.id] = true;
+        if (sg.kind === "event") setEvents((p) => p.some((e) => e.id === "ag" + sg.id) ? p : [...p, { id: "ag" + sg.id, title: sg.title, context: sg.context || "personal", date: sg.date || fmtD(today), time: sg.time || "00:00", duration: sg.duration || 0, desc: sg.desc || "", recurrence: "none", done: false }]);
+        if (sg.kind === "task") setTasks((p) => p.some((e) => e.id === "ag" + sg.id) ? p : [...p, { id: "ag" + sg.id, title: sg.title, context: sg.context || "personal", priority: sg.priority || "medium", status: "todo", deadline: sg.date || "", tags: [], estimateMins: 0, loggedMins: 0, recurrence: "none", dependsOn: [], subtasks: [] }]);
+        if (sg.kind === "cancel_event") setEvents((p) => p.filter((e) => e.id !== sg.target_id));
+        if (sg.kind === "cancel_task") setTasks((p) => p.filter((e) => e.id !== sg.target_id));
+        SB.from("agent_inbox").update({ status: "accepted" }).eq("id", sg.id).then(() => {});
+      });
+      setSugs(r.data.filter((x) => x.status === "pending"));
+    });
   }, []);
   useEffect(() => {
     loadSugs();
-    const iv = setInterval(loadSugs, 60000);
+    const iv = setInterval(loadSugs, 20000);
     const vis = () => { if (document.visibilityState === "visible") loadSugs(); };
     document.addEventListener("visibilitychange", vis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", vis); };
