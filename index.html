@@ -33,6 +33,7 @@
     <div style="font-size:12px;color:#8A7560">Carregando...</div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script>
@@ -2090,12 +2091,7 @@ function AIAssistantView({ tasks, events, habits, subjects, setEvents, setTasks,
       return null;
     }
   };
-  const lsSet = (k, v) => {
-    try {
-      localStorage.setItem("agendaplus_" + k, JSON.stringify(v));
-    } catch (e) {
-    }
-  };
+  const lsSet = (k, v) => { _lsSet("agendaplus_" + k, v); };
   const saveActiveConv = useCallback((msgs, id) => {
     const cid = id || activeId;
     if (!cid || msgs.length === 0) return;
@@ -2549,12 +2545,30 @@ function _lsGet(key) {
     return void 0;
   }
 }
+const SB = window.supabase.createClient("https://myuwytzbkckemcyfvhkx.supabase.co", "sb_publishable_txj23eTRYdEHQ425y3u73Q_cSnPYtjH");
+let _sbUser = null;
+const _sbQueue = {};
+let _sbTimer = null;
+function _sbFlush() {
+  _sbTimer = null;
+  if (!_sbUser) return;
+  const rows = Object.keys(_sbQueue).map((k) => ({ user_id: _sbUser, key: k, value: _sbQueue[k], updated_at: new Date().toISOString() }));
+  Object.keys(_sbQueue).forEach((k) => delete _sbQueue[k]);
+  if (!rows.length) return;
+  SB.from("kv").upsert(rows, { onConflict: "user_id,key" }).then((r) => { if (r.error) console.error("sync", r.error); });
+}
 function _lsSet(key, val) {
   try {
     localStorage.setItem(key, JSON.stringify(val));
   } catch (e) {
   }
+  if (_sbUser && key.indexOf("agendaplus_") === 0) {
+    _sbQueue[key] = val;
+    if (_sbTimer) clearTimeout(_sbTimer);
+    _sbTimer = setTimeout(_sbFlush, 800);
+  }
 }
+window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") _sbFlush(); });
 function usePersist(key, initVal) {
   const storageKey = "agendaplus_" + key;
   const [val, setValRaw] = useState(() => {
@@ -2576,7 +2590,7 @@ function usePersist(key, initVal) {
   }, [key]);
   return [val, setVal];
 }
-function App() {
+function AppInner({ onLogout }) {
   const [tab, setTab] = useState("dashboard");
   const [evModal, setEvModal] = useState({ open: false, date: null });
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2587,6 +2601,27 @@ function App() {
   const [subjects, setSubjects] = usePersist("subjects", INIT_SUBJECTS);
   const [bdays, setBdays] = usePersist("bdays", INIT_BDAYS);
   const [calUf, setCalUf] = usePersist("calendar_uf", "");
+  const [sugs, setSugs] = useState([]);
+  const loadSugs = useCallback(() => {
+    SB.from("agent_inbox").select("*").eq("status", "pending").order("created_at", { ascending: true }).then((r) => { if (!r.error && r.data) setSugs(r.data); });
+  }, []);
+  useEffect(() => {
+    loadSugs();
+    const iv = setInterval(loadSugs, 60000);
+    const vis = () => { if (document.visibilityState === "visible") loadSugs(); };
+    document.addEventListener("visibilitychange", vis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", vis); };
+  }, [loadSugs]);
+  const resolveSug = (sg, accept) => {
+    if (accept && sg.kind === "event") {
+      setEvents((p) => [...p, { id: uid(), title: sg.title, context: sg.context || "personal", date: sg.date || fmtD(today), time: sg.time || "00:00", duration: sg.duration || 0, desc: sg.desc || "", recurrence: "none", done: false }]);
+    }
+    if (accept && sg.kind === "task") {
+      setTasks((p) => [...p, { id: uid(), title: sg.title, context: sg.context || "personal", priority: sg.priority || "medium", status: "todo", deadline: sg.date || "", tags: [], estimateMins: 0, loggedMins: 0, recurrence: "none", dependsOn: [], subtasks: [] }]);
+    }
+    setSugs((p) => p.filter((x) => x.id !== sg.id));
+    SB.from("agent_inbox").update({ status: accept ? "accepted" : "dismissed" }).eq("id", sg.id).then(() => {});
+  };
   useEffect(() => {
     setTimeout(() => setReady(true), 300);
   }, []);
@@ -2633,10 +2668,74 @@ function App() {
       subjects,
       onClose: () => setSearchOpen(false)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, padding: "18px 16px 110px", maxWidth: 640, margin: "0 auto", width: "100%" } }, views[tab]), /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "7px 0 10px", zIndex: 100, overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: "max-content", paddingLeft: 4, paddingRight: 4 } }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: { background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "5px 10px", minWidth: 56 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: tab === t.id ? 19 : 17, filter: tab === t.id ? "none" : "grayscale(1)", transition: "all .15s" } }, t.icon), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? C.accent : C.muted, fontFamily: "inherit", whiteSpace: "nowrap" } }, t.label), tab === t.id && /* @__PURE__ */ React.createElement("div", { style: { width: 3, height: 3, borderRadius: "50%", background: C.accent } }))))), /* @__PURE__ */ React.createElement(AddEventModal, { open: evModal.open, onClose: () => setEvModal({ open: false, date: null }), onSave: (ev) => setEvents((p) => [...p, ev]), defaultDate: evModal.date }));
+  ), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, padding: "18px 16px 110px", maxWidth: 640, margin: "0 auto", width: "100%" } }, sugs.length > 0 && React.createElement("div", { style: { background: "#16213E", border: "1px solid #E2B96F", borderRadius: 14, padding: 12, marginBottom: 14 } },
+    React.createElement("div", { style: { fontWeight: 800, fontSize: 13, color: "#E2B96F", marginBottom: 8 } }, "\u{1F916} Sugeridos pelo agente (" + sugs.length + ")"),
+    sugs.map((sg) => React.createElement("div", { key: sg.id, style: { background: "#1A1A2E", borderRadius: 10, padding: 10, marginBottom: 8 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, (sg.kind === "task" ? "\u2705 " : "\u{1F4C5} ") + sg.title),
+      React.createElement("div", { style: { fontSize: 11, opacity: 0.7, margin: "3px 0 8px" } }, [sg.date ? new Date(sg.date + "T12:00").toLocaleDateString("pt-BR") : null, sg.kind === "event" ? sg.time : null, sg.source ? "via " + sg.source : null].filter(Boolean).join(" \u00B7 ") + (sg.desc ? " \u2014 " + sg.desc : "")),
+      React.createElement("div", { style: { display: "flex", gap: 8 } },
+        React.createElement("button", { onClick: () => resolveSug(sg, true), style: { flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: "#E2B96F", color: "#1A1A2E", fontWeight: 800, cursor: "pointer" } }, "Confirmar"),
+        React.createElement("button", { onClick: () => resolveSug(sg, false), style: { flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid #2D2D44", background: "transparent", color: "#E2B96F", cursor: "pointer" } }, "Descartar"))))), views[tab], React.createElement("div", { style: { textAlign: "center", marginTop: 24 } }, React.createElement("button", { onClick: onLogout, style: { background: "none", border: "none", color: "#8B8FAF", fontSize: 11, cursor: "pointer", textDecoration: "underline" } }, "Sair da conta"))), /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "7px 0 10px", zIndex: 100, overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: "max-content", paddingLeft: 4, paddingRight: 4 } }, TABS.map((t) => /* @__PURE__ */ React.createElement("button", { key: t.id, onClick: () => setTab(t.id), style: { background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "5px 10px", minWidth: 56 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: tab === t.id ? 19 : 17, filter: tab === t.id ? "none" : "grayscale(1)", transition: "all .15s" } }, t.icon), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? C.accent : C.muted, fontFamily: "inherit", whiteSpace: "nowrap" } }, t.label), tab === t.id && /* @__PURE__ */ React.createElement("div", { style: { width: 3, height: 3, borderRadius: "50%", background: C.accent } }))))), /* @__PURE__ */ React.createElement(AddEventModal, { open: evModal.open, onClose: () => setEvModal({ open: false, date: null }), onSave: (ev) => setEvents((p) => [...p, ev]), defaultDate: evModal.date }));
 }
-ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
-
+function LoginScreen({ onDone }) {
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [mode, setMode] = useState("in");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const inp = { width: "100%", padding: 12, borderRadius: 10, border: "1px solid #2D2D44", background: "#16213E", color: "#E2B96F", fontSize: 15, marginBottom: 10, fontFamily: "inherit" };
+  const go = async () => {
+    setBusy(true); setMsg("");
+    const r = mode === "in" ? await SB.auth.signInWithPassword({ email, password: pass }) : await SB.auth.signUp({ email, password: pass });
+    setBusy(false);
+    if (r.error) { setMsg(r.error.message); return; }
+    if (!r.data.session) { setMsg("Conta criada. Confirme o e-mail para entrar."); return; }
+    onDone(r.data.session);
+  };
+  return React.createElement("div", { style: { minHeight: "100vh", background: "#1A1A2E", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 } },
+    React.createElement("div", { style: { width: "100%", maxWidth: 340 } },
+      React.createElement("div", { style: { textAlign: "center", fontFamily: "Impact, Arial Black, sans-serif", fontSize: 30, letterSpacing: 2, color: "#E2B96F", marginBottom: 24 } }, "T\u00F4 no CORRE"),
+      React.createElement("input", { style: inp, type: "email", placeholder: "E-mail", value: email, onChange: (e) => setEmail(e.target.value), autoCapitalize: "none" }),
+      React.createElement("input", { style: inp, type: "password", placeholder: "Senha", value: pass, onChange: (e) => setPass(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") go(); } }),
+      msg && React.createElement("div", { style: { color: "#FF8C00", fontSize: 12, marginBottom: 10 } }, msg),
+      React.createElement("button", { onClick: go, disabled: busy, style: { width: "100%", padding: 13, borderRadius: 10, border: "none", background: "#E2B96F", color: "#1A1A2E", fontWeight: 800, fontSize: 15, cursor: "pointer" } }, busy ? "..." : mode === "in" ? "Entrar" : "Criar conta"),
+      React.createElement("div", { onClick: () => setMode(mode === "in" ? "up" : "in"), style: { textAlign: "center", marginTop: 14, fontSize: 12, color: "#8B8FAF", cursor: "pointer" } }, mode === "in" ? "Primeira vez? Criar conta" : "J\u00E1 tenho conta")));
+}
+async function pullRemote(uidv) {
+  const r = await SB.from("kv").select("key,value").eq("user_id", uidv);
+  if (r.error) throw r.error;
+  const remote = {};
+  (r.data || []).forEach((x) => { remote[x.key] = x.value; });
+  if (Object.keys(remote).length > 0) {
+    Object.keys(remote).forEach((k) => { try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {} const short = k.replace("agendaplus_", ""); delete _memCache[short]; });
+  } else {
+    const rows = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: uidv, key: k, value: JSON.parse(localStorage.getItem(k)) }); } catch (e) {} }
+    }
+    if (rows.length) await SB.from("kv").upsert(rows, { onConflict: "user_id,key" });
+  }
+}
+function App() {
+  const [state, setState] = useState("loading");
+  const [err, setErr] = useState("");
+  const start = async (session) => {
+    try {
+      _sbUser = session.user.id;
+      await pullRemote(session.user.id);
+      setState("app");
+    } catch (e) { setErr(e.message || String(e)); setState("error"); }
+  };
+  useEffect(() => {
+    SB.auth.getSession().then((r) => { if (r.data.session) start(r.data.session); else setState("login"); });
+  }, []);
+  const logout = async () => { _sbFlush(); await SB.auth.signOut(); _sbUser = null; location.reload(); };
+  if (state === "loading") return React.createElement("div", { style: { minHeight: "100vh", background: "#1A1A2E", color: "#E2B96F", display: "flex", alignItems: "center", justifyContent: "center" } }, "Carregando...");
+  if (state === "error") return React.createElement("div", { style: { padding: 30, color: "#E2B96F", background: "#1A1A2E", minHeight: "100vh" } }, "Erro ao sincronizar: " + err);
+  if (state === "login") return React.createElement(LoginScreen, { onDone: start });
+  return React.createElement(AppInner, { onLogout: logout });
+}
 try{
   ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
 }catch(e){
@@ -2656,3 +2755,4 @@ try{
 </script>
 </body>
 </html>
+
