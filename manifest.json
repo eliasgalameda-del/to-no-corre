@@ -2,7 +2,7 @@
   "name": "Tô no Corre",
   "short_name": "Tô no Corre",
   "description": "Sua agenda, no seu tempo!",
-  "start_url": "/Agenda/",
+  "start_url": "/to-no-corre/",
   "display": "standalone",
   "background_color": "#0D0F1A",
   "theme_color": "#0D0F1A",
@@ -22,6 +22,7 @@
       "purpose": "any maskable"
     }
   ],
-  "scope": "/Agenda/",
-  "id": "/Agenda/"
+  "scope": "/to-no-corre/",
+  "id": "/to-no-corre/"
 }
+
