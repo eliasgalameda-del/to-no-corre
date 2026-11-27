@@ -2418,7 +2418,8 @@ function AIAssistantView({ tasks, events, habits, subjects, bdays, sugs, setEven
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
-    const savedAiName = lsGet("ai_name") || "";
+    const savedAiName = "Jarvis";
+    if (lsGet("ai_name") !== "Jarvis") { lsSet("ai_name", "Jarvis"); setAiName("Jarvis"); _memCache["ai_name"] = "Jarvis"; }
     const savedUserName = lsGet("ai_user") || "";
     const savedConvs = lsGet("ai_convs") || [];
     if (savedAiName) {
@@ -2603,55 +2604,71 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
     (_a = window.speechSynthesis) == null ? void 0 : _a.cancel();
     setSpeaking(false);
   };
+  const sendRef = useRef(null);
+  sendRef.current = send;
+  const dictRef = useRef(null);
+  const textRef = useRef("");
+  const WAKE_RE = /\b(jarvis|jarvys|jarves|jarvi|garvis|charvis|jarvez|jarvice|djarvis|jarvais|jarbis|jarvas)\b/i;
+  const SEND_RE = /\b(enviar|envia|enviei)\b[\s.!?,]*$/i;
+  const beep = (f) => {
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.frequency.value = f || 880; gain.gain.value = 0.1;
+      osc.start(); osc.stop(ac.currentTime + 0.15);
+    } catch (e) {}
+  };
   const startWakeWord = useCallback(() => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) return;
-    if (wakeRef.current) return;
-    const aiN = (_memCache["ai_name"] || "").toLowerCase().trim();
-    if (!aiN) return;
+    if (wakeRef.current || dictRef.current) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = "pt-BR";
     rec.continuous = true;
     rec.interimResults = true;
     rec.onresult = (e) => {
-      const transcript = Array.from(e.results).map((r) => r[0].transcript.toLowerCase()).join(" ");
-      if (transcript.includes(aiN)) {
-        rec.stop();
+      const transcript = Array.from(e.results).map((r) => r[0].transcript).join(" ");
+      if (WAKE_RE.test(transcript)) {
+        const rest = transcript.split(WAKE_RE).pop().trim();
         wakeRef.current = null;
+        try { rec.stop(); } catch (err) {}
         setWakeActive(false);
-        const beep = new AudioContext();
-        const osc = beep.createOscillator();
-        const gain = beep.createGain();
-        osc.connect(gain);
-        gain.connect(beep.destination);
-        osc.frequency.value = 880;
-        gain.gain.value = 0.1;
-        osc.start();
-        osc.stop(beep.currentTime + 0.15);
-        setTimeout(() => startVoiceCommand(), 400);
+        beep(880);
+        setTimeout(() => startDictation(rest), 300);
       }
     };
     rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") { wakeRef.current = null; setWakeActive(false); return; }
       if (e.error !== "aborted") {
         wakeRef.current = null;
         setTimeout(startWakeWord, 2e3);
       }
     };
     rec.onend = () => {
-      if (wakeRef.current) {
+      if (wakeRef.current === rec) {
+        wakeRef.current = null;
         setTimeout(startWakeWord, 500);
       }
     };
-    rec.start();
+    try { rec.start(); } catch (err) { return; }
     wakeRef.current = rec;
     setWakeActive(true);
   }, []);
   const stopWakeWord = useCallback(() => {
     if (wakeRef.current) {
-      wakeRef.current.stop();
+      const r = wakeRef.current;
       wakeRef.current = null;
+      try { r.stop(); } catch (e) {}
+    }
+    if (dictRef.current) {
+      const d = dictRef.current;
+      dictRef.current = null;
+      try { d.stop(); } catch (e) {}
     }
     setWakeActive(false);
+    setListening(false);
   }, []);
   useEffect(() => {
     const timer = setTimeout(() => startWakeWord(), 2e3);
@@ -2660,30 +2677,52 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
       stopWakeWord();
     };
   }, []);
-  const startVoiceCommand = () => {
+  const startDictation = (initial) => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) return;
     stopSpeaking();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
+    const state = { done: false, timedOut: false, last: Date.now() };
+    const base = (initial || "").trim();
     rec.lang = "pt-BR";
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.continuous = true;
+    rec.interimResults = true;
+    dictRef.current = rec;
+    textRef.current = base;
+    setInput(base);
     rec.onstart = () => setListening(true);
-    rec.onend = () => {
-      setListening(false);
-      setTimeout(startWakeWord, 1e3);
-    };
-    rec.onerror = () => {
-      setListening(false);
-      setTimeout(startWakeWord, 1e3);
-    };
     rec.onresult = (e) => {
-      const text = e.results[0][0].transcript;
-      if (text.trim()) send(text);
+      state.last = Date.now();
+      const full = Array.from(e.results).map((r) => r[0].transcript).join(" ").trim();
+      const text = (base + " " + full).replace(WAKE_RE, " ").replace(/\s+/g, " ").trim();
+      if (SEND_RE.test(text)) {
+        if (state.done) return;
+        state.done = true;
+        const clean = text.replace(SEND_RE, "").trim();
+        textRef.current = "";
+        setInput("");
+        try { rec.stop(); } catch (err) {}
+        beep(660);
+        if (clean) sendRef.current(clean);
+        return;
+      }
+      textRef.current = text;
+      setInput(text);
     };
-    rec.start();
-    setListening(true);
+    const iv = setInterval(() => {
+      if (Date.now() - state.last > 30000 && !state.done) { state.timedOut = true; try { rec.stop(); } catch (err) {} }
+    }, 2000);
+    rec.onerror = (e) => { if (e.error === "not-allowed") state.done = true; };
+    rec.onend = () => {
+      clearInterval(iv);
+      if (dictRef.current === rec) dictRef.current = null;
+      setListening(false);
+      if (state.done || state.timedOut) { setTimeout(startWakeWord, 800); return; }
+      if (wakeRef.current === null && textRef.current !== undefined) setTimeout(() => startDictation(textRef.current), 250);
+    };
+    try { rec.start(); } catch (err) { setTimeout(startWakeWord, 800); }
   };
+  const startVoiceCommand = () => { stopWakeWord(); startDictation(""); };
   const lastMsgCount = useRef(0);
   useEffect(() => {
     const msgs = messages.filter((m) => m.role === "assistant");
@@ -2781,7 +2820,7 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
       value: input,
       onChange: (e) => setInput(e.target.value),
       onKeyDown: handleKey,
-      placeholder: step === "ai_name" ? "Nome para mim..." : step === "user_name" ? "Seu nome..." : "Pergunte ou pe\xE7a para criar...",
+      placeholder: listening ? "\u{1F399}\uFE0F Ouvindo... diga \u201Cenviar\u201D para mandar" : step === "ai_name" ? "Nome para mim..." : step === "user_name" ? "Seu nome..." : "Pergunte ou pe\xE7a para criar...",
       disabled: loading,
       rows: 2,
       style: { flex: 1, background: C.surface2, border: `1.5px solid ${input ? C.accent : C.border}`, borderRadius: 12, padding: "9px 11px", color: C.text, fontSize: 12, outline: "none", fontFamily: "inherit", resize: "none", opacity: loading ? 0.6 : 1 }
