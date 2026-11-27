@@ -32,6 +32,8 @@ class McpAgendaContractTests(unittest.TestCase):
         self.assertIn("offset: z.number().int().min(0).max(10000).default(0)", SOURCE)
         self.assertIn(".range(input.offset, input.offset + input.limit - 1)", SOURCE)
         self.assertIn("value._deleted === true", SOURCE)
+        self.assertIn("storedRow.payload._deleted === true", SOURCE)
+        self.assertIn("status: 'not_found'", SOURCE)
 
     def test_input_objects_are_strict_and_only_allow_agenda_fields(self):
         for schema in (

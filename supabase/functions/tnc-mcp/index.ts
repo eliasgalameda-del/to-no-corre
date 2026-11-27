@@ -296,7 +296,9 @@ Deno.serve(pipeline(
           .maybeSingle();
         if (readError) return failure('agenda_read_failed');
         if (!row) return textResult({ status: 'not_found', item_type: input.item_type, item_id: input.item_id });
-        const current = safeRow(row as AgendaRow);
+        const storedRow = row as AgendaRow;
+        if (isObject(storedRow.payload) && storedRow.payload._deleted === true) return textResult({ status: 'not_found', item_type: input.item_type, item_id: input.item_id });
+        const current = safeRow(storedRow);
         if (!current) return failure('invalid_stored_item');
         if (current.version !== input.expected_version) return textResult({ status: 'conflict', item_type: input.item_type, item_id: input.item_id, version: current.version, current: current.payload });
         const merged = { ...current.payload, ...patch.data };
