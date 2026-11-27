@@ -4,7 +4,7 @@
 - Prepared from `main` commit `b079e953a4198123b21b6f706f7bfa9ca9fec097`.
 - The CAS schema/functions are installed in Supabase project `myuwytzbkckemcyfvhkx` through migrations `agenda_items_cas_sync_path`, `agenda_legacy_migration_no_stale_resurrection`, `agenda_items_service_role_cas_only`, and `agenda_cas_reject_null_type`.
 - `agenda_sync_control.enabled` is intentionally `false`. This branch's new app path is dormant until the server-side cutover is explicitly enabled.
-- No `kv` policy has yet been changed; legacy clients remain unaffected. No app code has been merged to `main` or published.
+- No `kv` policy has yet been changed; legacy clients remain unaffected. No app code has been merged to `main` or published. The new app detects cached legacy-list divergence from normalized rows, keeps the local item state, and pauses those items for an explicit per-item resolution rather than overwriting either side.
 
 ## Data contract
 - App reads `agenda_items` per event/task and keeps `kv` for every other legacy app key.
@@ -16,4 +16,4 @@
 ## Cutover blocker / risks
 Old app builds continue whole-array writes to `kv`. The new app must not merge those arrays after normalized data exists. Enabling the flag alone is therefore not a complete rollout: stale app builds could keep changing legacy `kv` while new builds only read normalized rows, and the two sources would diverge. A controlled follow-up must deploy the app first, then apply a version barrier that prevents legacy `agendaplus_events` / `agendaplus_tasks` writes, and only then set `agenda_sync_control.enabled=true`. Old builds would no longer sync those two arrays; their on-device data remains but those builds need an explicit upgrade notice/support plan. Do not enable the flag until the barrier and user-facing path are reviewed and an authenticated CAS integration test is available.
 
-The current rollout intentionally does not alter the existing `kv` policy or enable the new path. There is no tested conflict-resolution UI yet; conflicts are reported and local edits retained, but choosing server-vs-local resolution still needs a product decision. Offline startup still depends on the existing auth/session flow.
+The current rollout intentionally does not alter the existing `kv` policy or enable the new path. The branch adds a basic per-item conflict-resolution choice (`Manter local` / `Usar nuvem`); it is not yet exercised with authenticated clients and needs product review. Choosing `Manter local` explicitly authorizes a CAS write against the displayed server version; a subsequent race still returns a conflict. Offline startup still depends on the existing auth/session flow.
