@@ -3230,6 +3230,7 @@ function ProfileView({ onLogout, counts }) {
     setBusy(true); setStatus("");
     try {
       await _refreshAgendaGate(user.id);
+      if (_agendaGateKnown && !_agendaSyncEnabled) { _agendaLegacyBlocked = false; _agendaSyncNotice = ""; }
       if (_agendaSyncEnabled && _agendaGateKnown) await _agendaDrain();
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -3664,6 +3665,7 @@ function App() {
   const logout = async () => {
     try {
       if (_sbUser) await _refreshAgendaGate(_sbUser);
+      if (_agendaGateKnown && !_agendaSyncEnabled) { _agendaLegacyBlocked = false; _agendaSyncNotice = ""; }
       if (_agendaSyncEnabled && _agendaGateKnown) {
         const synced = await _agendaDrain();
         if (!synced) {
