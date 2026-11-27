@@ -77,6 +77,14 @@ class McpAgendaContractTests(unittest.TestCase):
         self.assertNotIn(".update(", SOURCE)
         self.assertNotIn(".delete(", SOURCE)
 
+    def test_event_color_survives_reads_and_updates(self):
+        color_schema = "color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional()"
+        self.assertEqual(SOURCE.count(color_schema), 3)
+        # The stored schema used by safeRow and the patch schema both retain
+        # the app's existing hex color field during read/merge/update.
+        self.assertIn("const eventStoredSchema = z.object(eventFields)", SOURCE)
+        self.assertIn("const merged = { ...current.payload, ...patch.data }", SOURCE)
+
     def test_rpc_results_are_validated_and_outputs_whitelist_payload(self):
         self.assertIn("JSON.parse(decoded)", SOURCE)
         self.assertIn("['applied', 'conflict', 'not_found']", SOURCE)
