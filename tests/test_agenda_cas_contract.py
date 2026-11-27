@@ -78,6 +78,7 @@ class SchedulerAndBarrierTests(unittest.TestCase):
     def test_scheduler_switches_on_flag_and_fails_closed(self):
         self.assertIn('from("agenda_sync_control").select("enabled").eq("singleton", true)', self.scheduler)
         self.assertIn("if (controlError) throw controlError", self.scheduler)
+        self.assertIn('if (!control) throw new Error("agenda_sync_control_missing")', self.scheduler)
         self.assertIn('normalizedEnabled ? await loadNormalized(uid) : await loadLegacy(uid)', self.scheduler)
         self.assertIn('from("kv").select("key,value").eq("user_id", userId)', self.scheduler)
 

@@ -98,7 +98,8 @@ Deno.serve(async (req) => {
     // Fail closed on flag read errors; do not silently use stale legacy schedules after cutover.
     const { data: control, error: controlError } = await sb.from("agenda_sync_control").select("enabled").eq("singleton", true).maybeSingle();
     if (controlError) throw controlError;
-    const normalizedEnabled = control?.enabled === true;
+    if (!control) throw new Error("agenda_sync_control_missing");
+    const normalizedEnabled = control.enabled === true;
     const { data: us, error: usersError } = await sb.from("push_subs").select("user_id");
     if (usersError) throw usersError;
     const users = [...new Set((us || []).map((x: any) => x.user_id))];
