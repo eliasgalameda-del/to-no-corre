@@ -2945,6 +2945,9 @@ const _sbQueue = {};
 let _sbTimer = null;
 const _agendaMetaKey = "tnc_agenda_sync_v1";
 let _agendaSyncEnabled = false;
+let _agendaGateKnown = false;
+let _agendaLegacyBlocked = false;
+let _agendaSyncNotice = "";
 let _agendaMeta = { uid: null, versions: {}, pending: {}, conflicts: {} };
 let _agendaDraining = false;
 function _agendaItemKey(type, id) { return type + ":" + String(id); }
@@ -2967,9 +2970,58 @@ function _agendaStatusText() {
   const conflicts = Object.keys(_agendaMeta.conflicts || {}).length;
   if (conflicts) return "Conflito de sincronização em " + conflicts + " item(ns). As alterações locais foram preservadas; sincronização pausada para esses itens.";
   if (pending) return "" + pending + " alteração(ões) da agenda aguardando sincronização.";
+  if (_agendaSyncNotice) return _agendaSyncNotice;
   return _agendaSyncEnabled ? "Agenda sincronizada por item." : "";
 }
 function _agendaNotify() { try { window.dispatchEvent(new Event("agenda-sync-update")); } catch (e) {} }
+function _agendaIsBlockedWrite(error) {
+  if (!error) return false;
+  const text = String(error.message || error.details || error.hint || "").toLowerCase();
+  return error.code === "42501" || /row-level security|violates .*policy|permission denied/.test(text);
+}
+function _agendaIsLegacyKey(key) { return key === "agendaplus_events" || key === "agendaplus_tasks"; }
+async function _refreshAgendaGate(uidv) {
+  if (!navigator.onLine) { _agendaGateKnown = false; _agendaSyncNotice = "Sem conexão. A agenda local foi mantida; conecte-se e toque em Sincronizar agora."; _agendaNotify(); return false; }
+  try {
+    const result = await Promise.race([SB.rpc("agenda_sync_enabled"), new Promise((resolve) => setTimeout(() => resolve({ error: { message: "timeout" } }), 5000))]);
+    if (result.error || typeof result.data !== "boolean") throw result.error || new Error("invalid_flag");
+    _agendaSyncEnabled = result.data;
+    _agendaGateKnown = true;
+    if (_agendaSyncEnabled) {
+      _agendaLegacyBlocked = false;
+      _agendaSyncNotice = "";
+      _agendaLoadMeta(uidv);
+    } else if (!_agendaLegacyBlocked) _agendaSyncNotice = "";
+    _agendaNotify();
+    return true;
+  } catch (e) {
+    _agendaGateKnown = false;
+    _agendaSyncNotice = "Não foi possível confirmar o modo de sincronização. A agenda foi mantida neste aparelho; tente novamente quando estiver online.";
+    _agendaNotify();
+    return false;
+  }
+}
+async function _writeKvRows(uidv, rows) {
+  const agendaRows = rows.filter((row) => _agendaIsLegacyKey(row.key));
+  const prefRows = rows.filter((row) => !_agendaIsLegacyKey(row.key));
+  const mustIsolate = !_agendaGateKnown || _agendaSyncEnabled || _agendaLegacyBlocked;
+  if (mustIsolate) {
+    if (!_agendaGateKnown) _agendaSyncNotice = "Modo de sincronização indisponível; preferências podem sincronizar, mas a agenda fica preservada neste aparelho.";
+    else if (_agendaSyncEnabled) _agendaSyncNotice = "";
+    if (agendaRows.length) _agendaNotify();
+    const r = prefRows.length ? await SB.from("kv").upsert(prefRows, { onConflict: "user_id,key" }) : { error: null };
+    return { error: r.error || null, agendaBlocked: false, preferencesSaved: !r.error };
+  }
+  if (!rows.length) return { error: null, agendaBlocked: false, preferencesSaved: true };
+  const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" });
+  if (!r.error) return { error: null, agendaBlocked: false, preferencesSaved: true };
+  if (!agendaRows.length || !_agendaIsBlockedWrite(r.error)) return { error: r.error, agendaBlocked: false, preferencesSaved: false };
+  _agendaLegacyBlocked = true;
+  _agendaSyncNotice = "A nuvem bloqueou a gravação da agenda desta versão. Seus eventos e tarefas continuam neste aparelho. Atualize/recarregue o app e toque em Sincronizar agora; não saia da conta até concluir a recuperação.";
+  const retry = prefRows.length ? await SB.from("kv").upsert(prefRows, { onConflict: "user_id,key" }) : { error: null };
+  _agendaNotify();
+  return { error: retry.error || null, agendaBlocked: true, preferencesSaved: !retry.error };
+}
 async function _agendaResolveConflict(key, choice) {
   const conflict = _agendaMeta.conflicts[key];
   const pending = _agendaMeta.pending[key];
@@ -3044,21 +3096,33 @@ async function _agendaDrain() {
   _agendaNotify();
   return ok && !Object.keys(_agendaMeta.pending).length;
 }
-function _sbFlush() {
+async function _sbFlush() {
   _sbTimer = null;
-  if (!_sbUser) return;
-  const keys = Object.keys(_sbQueue).filter((k) => !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks")));
-  const rows = keys.map((k) => ({ user_id: _sbUser, key: k, value: _sbQueue[k], updated_at: new Date().toISOString() }));
-  keys.forEach((k) => delete _sbQueue[k]);
-  if (Object.keys(_sbQueue).length) Object.keys(_sbQueue).filter((k) => _agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks")).forEach((k) => delete _sbQueue[k]);
-  if (rows.length) SB.from("kv").upsert(rows, { onConflict: "user_id,key" }).then((r) => { if (r.error) console.error("sync", r.error); });
-  if (_agendaSyncEnabled) _agendaDrain();
+  if (!_sbUser) return { error: null };
+  const snapshot = Object.assign({}, _sbQueue);
+  const keys = Object.keys(snapshot);
+  keys.forEach((k) => { if (_sbQueue[k] === snapshot[k]) delete _sbQueue[k]; });
+  const rows = keys.map((k) => ({ user_id: _sbUser, key: k, value: snapshot[k], updated_at: new Date().toISOString() }));
+  try {
+    const result = await _writeKvRows(_sbUser, rows);
+    if (result.error) {
+      keys.forEach((k) => { if (!(_agendaLegacyBlocked && _agendaIsLegacyKey(k))) _sbQueue[k] = snapshot[k]; });
+      if (!_sbTimer && Object.keys(_sbQueue).length) _sbTimer = setTimeout(_sbFlush, 5000);
+      return result;
+    }
+    if (_agendaSyncEnabled) await _agendaDrain();
+    return result;
+  } catch (e) {
+    keys.forEach((k) => { if (!(_agendaLegacyBlocked && _agendaIsLegacyKey(k))) _sbQueue[k] = snapshot[k]; });
+    if (!_sbTimer && Object.keys(_sbQueue).length) _sbTimer = setTimeout(_sbFlush, 5000);
+    return { error: e };
+  }
 }
 function _lsSet(key, val) {
   let before;
   try { before = JSON.parse(localStorage.getItem(key) || "null"); } catch (e) {}
   try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
-  if (_agendaSyncEnabled && (key === "agendaplus_events" || key === "agendaplus_tasks")) {
+  if (_agendaSyncEnabled && _agendaGateKnown && _agendaIsLegacyKey(key)) {
     _agendaQueueListChange(key === "agendaplus_events" ? "event" : "task", before, val);
     return;
   }
@@ -3069,7 +3133,7 @@ function _lsSet(key, val) {
   }
 }
 window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") _sbFlush(); });
-window.addEventListener("online", () => { if (_agendaSyncEnabled) _agendaDrain(); });
+window.addEventListener("online", () => { if (_sbUser) { _refreshAgendaGate(_sbUser).then(() => { _sbFlush(); if (_agendaSyncEnabled) pullRemote(_sbUser); }); } });
 function usePersist(key, initVal) {
   const storageKey = "agendaplus_" + key;
   const [val, setValRaw] = useState(() => {
@@ -3165,18 +3229,22 @@ function ProfileView({ onLogout, counts }) {
   const syncNow = async () => {
     setBusy(true); setStatus("");
     try {
-      if (_agendaSyncEnabled) await _agendaDrain();
+      await _refreshAgendaGate(user.id);
+      if (_agendaSyncEnabled && _agendaGateKnown) await _agendaDrain();
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && k.indexOf("agendaplus_") === 0 && !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks"))) { try { rows.push({ user_id: user.id, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+        if (k && k.indexOf("agendaplus_") === 0) {
+          try { rows.push({ user_id: user.id, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {}
+        }
       }
-      const r = rows.length ? await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }) : { error: null };
-      const agendaText = _agendaSyncEnabled ? _agendaStatusText() : "";
+      const result = await _writeKvRows(user.id, rows);
+      const agendaText = _agendaStatusText();
       setAgendaMsg(agendaText);
-      setStatus(r.error ? "Erro ao sincronizar: " + r.error.message : agendaText && !agendaText.startsWith("Agenda sincronizada") ? "Sincronização geral concluída; " + agendaText : "\u2705 Tudo sincronizado (" + rows.length + " grupos de dados)");
-    } catch (e) { setStatus("Erro ao sincronizar."); }
-    setBusy(false);
+      setStatus(result.error ? "Preferências/agenda não totalmente sincronizadas: " + (result.error.message || "erro de rede") : result.agendaBlocked || !_agendaGateKnown ? "Preferências sincronizadas quando possível; " + (agendaText || "agenda mantida neste aparelho") : agendaText && !agendaText.startsWith("Agenda sincronizada") ? "Sincronização geral concluída; " + agendaText : "✅ Tudo sincronizado (" + rows.filter((row) => !_agendaSyncEnabled || !_agendaIsLegacyKey(row.key)).length + " grupos de dados)");
+    } catch (e) {
+      setStatus("Não consegui concluir a sincronização. Seus dados locais foram mantidos; tente novamente.");
+    } finally { setBusy(false); }
   };
   const card = { background: C.surface2, border: "1.5px solid " + C.border, borderRadius: 16, padding: 16 };
   const stat = (n, l) => React.createElement("div", { style: { flex: 1, textAlign: "center" } }, React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: C.accent } }, n), React.createElement("div", { style: { fontSize: 10, color: C.muted } }, l));
@@ -3470,18 +3538,51 @@ function LoginScreen({ onDone }) {
       React.createElement("div", { style: { textAlign: "center", marginTop: 18, fontSize: 11, color: "#5d5a70" } }, "\u{1F512} Seus dados ficam salvos e protegidos na sua conta")));
 }
 async function pullRemote(uidv) {
-  const gate = await SB.rpc("agenda_sync_enabled");
-  if (gate.error) throw gate.error;
-  _agendaSyncEnabled = gate.data === true;
-  if (_agendaSyncEnabled) {
-    _agendaLoadMeta(uidv);
-    const imported = await SB.rpc("agenda_migrate_legacy_items");
-    if (imported.error) throw imported.error;
+  if (!navigator.onLine) {
+    _agendaGateKnown = false;
+    _agendaSyncNotice = "Sem conexão. A agenda local foi mantida; sincronização será retomada quando você voltar a ficar online.";
+    _agendaNotify();
+    return;
+  }
+  await _refreshAgendaGate(uidv);
+  try {
     const r = await SB.from("kv").select("key,value").eq("user_id", uidv);
     if (r.error) throw r.error;
     const remote = {};
     (r.data || []).forEach((x) => { remote[x.key] = x.value; });
-    Object.keys(remote).filter((k) => k !== "agendaplus_events" && k !== "agendaplus_tasks").forEach((k) => { try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {} delete _memCache[k.replace("agendaplus_", "")]; });
+    if (!_agendaGateKnown) {
+      Object.keys(remote).filter((k) => !_agendaIsLegacyKey(k)).forEach((k) => {
+        try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {}
+        delete _memCache[k.replace("agendaplus_", "")];
+      });
+      const rows = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf("agendaplus_") === 0 && !_agendaIsLegacyKey(k)) { try { rows.push({ user_id: uidv, key: k, value: JSON.parse(localStorage.getItem(k)) }); } catch (e) {} }
+      }
+      if (rows.length) await _writeKvRows(uidv, rows);
+      _agendaNotify();
+      return;
+    }
+    if (!_agendaSyncEnabled) {
+      if (Object.keys(remote).length > 0) {
+        Object.keys(remote).forEach((k) => { try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {} const short = k.replace("agendaplus_", ""); delete _memCache[short]; });
+      } else {
+        const rows = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: uidv, key: k, value: JSON.parse(localStorage.getItem(k)) }); } catch (e) {} }
+        }
+        if (rows.length) await _writeKvRows(uidv, rows);
+      }
+      return;
+    }
+
+    _agendaLoadMeta(uidv);
+    Object.keys(remote).filter((k) => !_agendaIsLegacyKey(k)).forEach((k) => {
+      try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {}
+      delete _memCache[k.replace("agendaplus_", "")];
+    });
     const itemRows = [];
     for (let offset = 0; ; offset += 1000) {
       const page = await SB.from("agenda_items").select("item_type,item_id,payload,version").eq("user_id", uidv).range(offset, offset + 999);
@@ -3500,8 +3601,9 @@ async function pullRemote(uidv) {
     });
     ["event", "task"].forEach((type) => {
       const storageKey = "agendaplus_" + (type === "event" ? "events" : "tasks");
+      const localRaw = localStorage.getItem(storageKey);
       let legacyLocal = null;
-      try { legacyLocal = JSON.parse(localStorage.getItem(storageKey) || "null"); } catch (e) {}
+      try { legacyLocal = localRaw === null ? null : JSON.parse(localRaw); } catch (e) {}
       if (Array.isArray(legacyLocal) && itemRows.length) {
         const localById = Object.create(null);
         legacyLocal.forEach((item) => { if (item && item.id !== void 0 && item.id !== null) localById[String(item.id)] = item; });
@@ -3526,38 +3628,30 @@ async function pullRemote(uidv) {
         else if (idx >= 0) list[idx] = pending.payload;
         else if (pending.payload) list.push(pending.payload);
       });
-      try { localStorage.setItem("agendaplus_" + (type === "event" ? "events" : "tasks"), JSON.stringify(list)); } catch (e) {}
-      delete _memCache[type === "event" ? "events" : "tasks"];
+      if (itemRows.length || localRaw !== null) {
+        try { localStorage.setItem(storageKey, JSON.stringify(list)); } catch (e) {}
+        delete _memCache[type === "event" ? "events" : "tasks"];
+      }
     });
+    if (!itemRows.length && (localStorage.getItem("agendaplus_events") !== null || localStorage.getItem("agendaplus_tasks") !== null)) {
+      _agendaSyncNotice = "A agenda em nuvem ainda não tem itens normalizados. Seus dados locais/legados foram preservados e não serão importados automaticamente.";
+    }
     _agendaSaveMeta();
     _agendaNotify();
-    await _agendaDrain();
-    return;
-  }
-  const r = await SB.from("kv").select("key,value").eq("user_id", uidv);
-  if (r.error) throw r.error;
-  const remote = {};
-  (r.data || []).forEach((x) => { remote[x.key] = x.value; });
-  if (Object.keys(remote).length > 0) {
-    Object.keys(remote).forEach((k) => { try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {} const short = k.replace("agendaplus_", ""); delete _memCache[short]; });
-  } else {
-    const rows = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: uidv, key: k, value: JSON.parse(localStorage.getItem(k)) }); } catch (e) {} }
-    }
-    if (rows.length) await SB.from("kv").upsert(rows, { onConflict: "user_id,key" });
+    if (navigator.onLine) await _agendaDrain();
+  } catch (e) {
+    _agendaSyncNotice = "A nuvem não respondeu. Seus dados locais foram mantidos; tente sincronizar novamente quando estiver online.";
+    _agendaNotify();
+    console.warn("pullRemote compatibility fallback", e);
   }
 }
 function App() {
   const [state, setState] = useState("loading");
   const [err, setErr] = useState("");
   const start = async (session) => {
-    try {
-      _sbUser = session.user.id;
-      await pullRemote(session.user.id);
-      setState("app");
-    } catch (e) { setErr(e.message || String(e)); setState("error"); }
+    _sbUser = session.user.id;
+    await pullRemote(session.user.id);
+    setState("app");
   };
   useEffect(() => {
     SB.auth.getSession().then(async (r) => {
@@ -3569,21 +3663,30 @@ function App() {
   }, []);
   const logout = async () => {
     try {
-      if (_agendaSyncEnabled) {
+      if (_sbUser) await _refreshAgendaGate(_sbUser);
+      if (_agendaSyncEnabled && _agendaGateKnown) {
         const synced = await _agendaDrain();
-        if (!synced && !confirm("Há alterações da agenda pendentes ou em conflito. Se sair, elas serão mantidas apenas neste aparelho para esta conta. Sair mesmo assim?")) return;
+        if (!synced) {
+          alert("Há alterações da agenda ainda não sincronizadas. Seus dados locais foram preservados; reconecte e sincronize antes de sair.");
+          return;
+        }
       }
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && k.indexOf("agendaplus_") === 0 && !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks"))) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+        if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
       }
-      if (rows.length) { const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }); if (r.error) {
-        if (!confirm("Não consegui salvar seus dados na nuvem. Sair mesmo assim? Seus dados continuam guardados neste aparelho.")) return;
-        await SB.auth.signOut(); _sbUser = null; location.reload(); return;
-      } }
-      Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0).forEach((k) => localStorage.removeItem(k));
-    } catch (e) {}
+      const result = await _writeKvRows(_sbUser, rows);
+      if (result.error || result.agendaBlocked || !_agendaGateKnown) {
+        alert("Não consegui confirmar o salvamento da agenda na nuvem. Seus dados continuam neste aparelho; permaneça nesta conta, conecte-se e tente sincronizar antes de sair.");
+        return;
+      }
+      await _sbFlush();
+      Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0 || k === _agendaMetaKey).forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      alert("Não consegui confirmar o salvamento. Seus dados locais foram preservados; tente novamente antes de sair.");
+      return;
+    }
     await SB.auth.signOut(); _sbUser = null; location.reload();
   };
   if (state === "loading") return React.createElement("div", { style: { minHeight: "100vh", background: "#1A1A2E", color: "#E2B96F", display: "flex", alignItems: "center", justifyContent: "center" } }, "Carregando...");

@@ -61,7 +61,7 @@ class AgendaCasContractTests(unittest.TestCase):
         self.assertIn("baseVersion: existing ? existing.baseVersion", APP)
         self.assertIn('row.status === "conflict"', APP)
         self.assertIn("_agendaMeta.conflicts[key]", APP)
-        self.assertIn('k !== "agendaplus_events" && k !== "agendaplus_tasks"', APP)
+        self.assertIn('function _agendaIsLegacyKey(key)', APP)
         self.assertIn("_agendaStableStringify(localItem || null)", APP)
         self.assertIn('_agendaResolveConflict(key, "local")', APP)
         self.assertIn('_agendaResolveConflict(key, "server")', APP)
@@ -120,6 +120,47 @@ class SchedulerAndBarrierTests(unittest.TestCase):
         self.assertNotIn('caches.', worker)
         self.assertNotRegex(APP, r'\b(?:APP_VERSION|BUILD_ID|MINIMUM_APP_VERSION)\b')
         self.assertIn('navigator.serviceWorker.register("sw.js")', APP)
+
+class CompatibilityBuildTests(unittest.TestCase):
+    def test_blocked_legacy_agenda_batch_retries_preferences_independently(self):
+        self.assertIn('function _agendaIsBlockedWrite(error)', APP)
+        self.assertIn('error.code === "42501"', APP)
+        self.assertIn('const agendaRows = rows.filter((row) => _agendaIsLegacyKey(row.key))', APP)
+        self.assertIn('const retry = prefRows.length ? await SB.from("kv").upsert(prefRows', APP)
+        self.assertIn('A nuvem bloqueou a gravação da agenda desta versão', APP)
+        self.assertIn('Seus eventos e tarefas continuam neste aparelho', APP)
+
+    def test_enabled_or_unknown_gate_never_writes_legacy_arrays_to_kv(self):
+        self.assertIn('const mustIsolate = !_agendaGateKnown || _agendaSyncEnabled || _agendaLegacyBlocked', APP)
+        pull = APP[APP.index('async function pullRemote(uidv) {'):APP.index('\nfunction App() {', APP.index('async function pullRemote(uidv) {'))]
+        self.assertNotIn('agenda_migrate_legacy_items', pull)
+        self.assertIn('if (!_agendaGateKnown)', pull)
+        self.assertIn('filter((k) => !_agendaIsLegacyKey(k))', pull)
+
+    def test_offline_bootstrap_and_reconnect_keep_local_queue_retryable(self):
+        self.assertIn('if (!navigator.onLine)', APP[APP.index('async function pullRemote(uidv) {'):])
+        self.assertIn('_agendaGateKnown = false', APP)
+        self.assertIn('if (!_sbTimer && Object.keys(_sbQueue).length) _sbTimer = setTimeout(_sbFlush, 5000)', APP)
+        self.assertIn('window.addEventListener("online"', APP)
+        self.assertIn('pullRemote(_sbUser)', APP)
+
+    def test_logout_does_not_clear_local_agenda_if_cloud_save_is_unconfirmed(self):
+        start = APP.index('  const logout = async () => {', APP.index('function App()'))
+        end = APP.index('\n  if (state === "loading")', start)
+        logout = APP[start:end]
+        self.assertIn('if (result.error || result.agendaBlocked || !_agendaGateKnown)', logout)
+        self.assertIn('return;', logout)
+        self.assertLess(logout.index('if (result.error || result.agendaBlocked || !_agendaGateKnown)'), logout.index('Object.keys(localStorage).filter'))
+        self.assertIn('await _agendaDrain()', logout)
+
+    def test_manual_sync_refreshes_gate_and_sends_non_agenda_even_when_enabled(self):
+        start = APP.index('  const syncNow = async () => {')
+        end = APP.index('\n  const card =', start)
+        sync = APP[start:end]
+        self.assertIn('await _refreshAgendaGate(user.id)', sync)
+        self.assertIn('await _agendaDrain()', sync)
+        self.assertIn('await _writeKvRows(user.id, rows)', sync)
+        self.assertIn('finally { setBusy(false); }', sync)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
