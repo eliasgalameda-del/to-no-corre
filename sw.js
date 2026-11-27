@@ -8,8 +8,8 @@ self.addEventListener("push", (event) => {
     body: d.body || "",
     icon: "icon-192.png",
     badge: "icon-192.png",
-    tag: d.id || "tnc",
-    data: { id: d.id, token: d.token },
+    tag: d.tag || d.id || "tnc",
+    data: { id: d.id, token: d.token, url: d.url },
     actions: d.id ? [{ action: "accept", title: "✅ Confirmar" }, { action: "dismiss", title: "❌ Descartar" }] : [],
   }));
 });
@@ -28,6 +28,6 @@ self.addEventListener("notificationclick", (event) => {
   }
   event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
     for (const c of list) { if ("focus" in c) return c.focus(); }
-    return self.clients.openWindow("./");
+    return self.clients.openWindow((n.data && n.data.url) || "./");
   }));
 });
