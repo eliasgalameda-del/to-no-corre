@@ -152,12 +152,14 @@ class CompatibilityBuildTests(unittest.TestCase):
         self.assertIn('return;', logout)
         self.assertLess(logout.index('if (result.error || result.agendaBlocked || !_agendaGateKnown)'), logout.index('Object.keys(localStorage).filter'))
         self.assertIn('await _agendaDrain()', logout)
+        self.assertIn('_agendaLegacyBlocked = false', logout)
 
     def test_manual_sync_refreshes_gate_and_sends_non_agenda_even_when_enabled(self):
         start = APP.index('  const syncNow = async () => {')
         end = APP.index('\n  const card =', start)
         sync = APP[start:end]
         self.assertIn('await _refreshAgendaGate(user.id)', sync)
+        self.assertIn('_agendaLegacyBlocked = false', sync)
         self.assertIn('await _agendaDrain()', sync)
         self.assertIn('await _writeKvRows(user.id, rows)', sync)
         self.assertIn('finally { setBusy(false); }', sync)
