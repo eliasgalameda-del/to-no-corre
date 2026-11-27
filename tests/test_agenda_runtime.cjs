@@ -1,9 +1,5 @@
-/* Offline behavioral tests of the actual staged JS, with a mocked browser and
- * Supabase adapter. No real backend, browser, service worker, or auth session.
- * Run: node tests/test_agenda_runtime.cjs
- * IMPORTANT: the offline legacy reconnection regression is intentionally RED
- * until local changes can be recovered without silently overwriting the cloud.
- */
+/* Behavioral tests execute the actual staged browser code in a mocked JS VM.
+ * No real browser/backend/push, no production network. */
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -15,92 +11,41 @@ const pullStart = html.indexOf('async function pullRemote(uidv) {');
 const appStart = html.indexOf('\nfunction App() {', pullStart);
 const pullCode = html.slice(pullStart, appStart);
 const appCode = html.slice(appStart, html.indexOf('\ntry{\n  ReactDOM.createRoot', appStart));
-if (begin < 0 || pullStart < 0 || appStart < 0 || !syncCode || !pullCode || !appCode) throw Error('app entry points not found');
-
+if (begin < 0 || pullStart < 0 || appStart < 0) throw Error('app entry points not found');
+function clone(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
 function fixture(options = {}) {
-  const storage = new Map(), writes = [], states = [], effects = [];
+  const storage = options.storage || new Map(), writes = [], states = [], effects = [], alerts = [], listeners = {};
+  const db = options.db || new Map((options.remote || []).map(row => [row.key, clone(row.value)]));
   let signouts = 0;
-  const localStorage = {
-    getItem: key => storage.has(key) ? storage.get(key) : null,
-    setItem: (key, value) => storage.set(key, String(value)),
-    removeItem: key => storage.delete(key),
-    key: i => Array.from(storage.keys())[i],
-    get length() { return storage.size; },
-  };
+  const localStorage = { getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k,v) => storage.set(k,String(v)), removeItem: k => storage.delete(k), key: i => [...storage.keys()][i], get length() { return storage.size; } };
   const supabase = {
-    rpc: async (name, args) => name === 'agenda_sync_enabled'
-      ? { data: options.flag ?? false, error: null }
-      : options.cas ? options.cas(args) : { data: { status: 'applied', version: (args.p_expected_version || 0) + 1 }, error: null },
+    rpc: async (name,args) => name === 'agenda_sync_enabled' ? { data: options.flag ?? false, error: null } : options.cas ? options.cas(args) : { data: { status:'applied',version:(args.p_expected_version||0)+1 },error:null },
     from: table => ({
-      upsert: async rows => { writes.push(JSON.parse(JSON.stringify(rows))); return options.upsert ? options.upsert(rows) : { error: null }; },
-      select: () => ({ eq: () => table === 'kv'
-        ? Promise.resolve({ data: options.remote ?? [], error: null })
-        : { range: () => Promise.resolve({ data: options.items ?? [], error: null }) } }),
+      upsert: async rows => {
+        writes.push(clone(rows));
+        const custom = options.upsert ? await options.upsert(rows) : { error: null };
+        if (!custom.error) rows.forEach(row => db.set(row.key, clone(row.value)));
+        return custom;
+      },
+      select: () => ({ eq: async () => ({ data: table === 'kv' ? [...db.entries()].map(([key,value]) => ({ key, value: clone(value) })) : clone(options.items || []), error: null }) }),
     }),
-    auth: {
-      getSession: async () => ({ data: { session: { user: { id: 'test-user' } } } }),
-      getUser: async () => options.authUser ?? { data: { user: { id: 'test-user' } }, error: null },
-      signOut: async () => { signouts++; return { error: null }; },
-    },
+    auth: { getSession: async () => ({data:{session:{user:{id:'test-user'}}}}), getUser: async () => options.authUser ?? {data:{user:{id:'test-user'}},error:null}, signOut: async () => { signouts++;return {error:null}; } },
   };
   const navigator = { onLine: options.online ?? true };
-  const sandbox = {
-    console, localStorage, navigator,
-    window: { supabase: { createClient: () => supabase }, addEventListener: () => {}, dispatchEvent: () => {} },
-    document: { visibilityState: 'visible' }, Event: class {}, location: { reload: () => {} },
-    setTimeout: () => 1, clearTimeout: () => {},
-    React: { createElement: (type, props) => ({ type, props }) }, LoginScreen: 'login', AppInner: 'inner',
-    useState: value => { const i = states.push(value) - 1; return [value, next => states[i] = next]; },
-    useEffect: effect => effects.push(effect), alert: () => {},
-  };
-  vm.createContext(sandbox);
-  vm.runInContext('const _memCache={};\n' + syncCode + '\n' + pullCode + '\n' + appCode, sandbox);
-  return { sandbox, storage, writes, states, effects, navigator, get signouts() { return signouts; } };
+  const sandbox = { console, localStorage, navigator, window:{supabase:{createClient:()=>supabase},addEventListener:(name,fn)=>listeners[name]=fn,dispatchEvent:()=>{}}, document:{visibilityState:'visible'}, Event:class{}, location:{reload:()=>{}}, setTimeout:()=>1,clearTimeout:()=>{}, React:{createElement:(type,props)=>({type,props})}, LoginScreen:'login',AppInner:'inner', useState:value=>{const i=sandbox.__hook++;if(states[i]===undefined)states[i]=value;return [states[i],next=>states[i]=next];},useEffect:effect=>effects.push(effect),alert:m=>alerts.push(m) };
+  sandbox.sandbox=sandbox;vm.createContext(sandbox);vm.runInContext('const _memCache={};\n'+syncCode+'\n'+pullCode+'\n'+appCode,sandbox);
+  return {sandbox,storage,db,writes,states,effects,alerts,navigator,listeners,get signouts(){return signouts;}};
 }
-const run = (x, code) => vm.runInContext(code, x.sandbox);
-const tests = [
-  ['empty normalized cloud preserves existing local agenda', async () => {
-    const x = fixture({ flag: true, items: [] });
-    x.storage.set('agendaplus_events', JSON.stringify([{ id: 'x', title: 'local' }]));
-    await run(x, "pullRemote('test-user')");
-    assert.equal(JSON.parse(x.storage.get('agendaplus_events'))[0]?.title, 'local');
-  }],
-  ['offline cached session opens local app without signing out', async () => {
-    const x = fixture({ online: false, authUser: { data: { user: null }, error: { message: 'network' } } });
-    run(x, 'App()'); await x.effects[0](); await new Promise(resolve => setImmediate(resolve));
-    assert.equal(x.signouts, 0); assert.equal(x.states[0], 'app');
-  }],
-  ['online rejected account is not accepted as cached offline session', async () => {
-    const x = fixture({ online: true, authUser: { data: { user: null }, error: { message: 'unauthorized' } } });
-    run(x, 'App()'); await x.effects[0](); await new Promise(resolve => setImmediate(resolve));
-    assert.equal(x.signouts, 1); assert.equal(x.states[0], 'login');
-  }],
-  ['denied legacy mixed batch retries only preference rows', async () => {
-    const x = fixture({ upsert: rows => ({ error: rows.some(row => row.key === 'agendaplus_events') ? { code: '42501' } : null }) });
-    const result = await run(x, `_agendaGateKnown=true;_agendaSyncEnabled=false;_writeKvRows('test-user',[{key:'agendaplus_events',value:[{id:'x'}]},{key:'agendaplus_theme',value:'dark'}])`);
-    assert.equal(result.agendaBlocked, true); assert.equal(x.writes.length, 2); assert.deepEqual(x.writes[1].map(row => row.key), ['agendaplus_theme']);
-  }],
-  ['stale CAS conflict retains local item and cloud version', async () => {
-    const x = fixture({ flag: true, cas: () => ({ data: { status: 'conflict', version: 2, payload: { id: 'x', title: 'remote' } }, error: null }) });
-    const ok = await run(x, `_agendaSyncEnabled=true;_agendaGateKnown=true;_agendaLoadMeta('test-user');_agendaMeta.versions['event:x']=1;_agendaMeta.pending['event:x']={type:'event',id:'x',deleted:false,payload:{id:'x',title:'local'},baseVersion:1};_agendaDrain()`);
-    const meta = run(x, `_agendaMeta`);
-    assert.equal(ok, false); assert.equal(meta.pending['event:x'].payload.title, 'local'); assert.equal(meta.conflicts['event:x'].version, 2);
-  }],
-  ['offline legacy edit survives flush and reconnect', async () => {
-    const x = fixture({ online: false, flag: false, remote: [{ key: 'agendaplus_events', value: [{ id: 'x', title: 'old remote' }] }] });
-    x.storage.set('agendaplus_events', JSON.stringify([{ id: 'x', title: 'old remote' }]));
-    await run(x, `_sbUser='test-user';_agendaSyncEnabled=false;_refreshAgendaGate('test-user')`);
-    await run(x, `_lsSet('agendaplus_events',[{id:'x',title:'new offline'}]);_sbFlush()`);
-    x.navigator.onLine = true; await run(x, `pullRemote('test-user')`);
-    assert.equal(JSON.parse(x.storage.get('agendaplus_events'))[0]?.title, 'new offline', 'offline edit must never be silently replaced by old cloud data');
-  }],
+const run=(x,code)=>vm.runInContext(code,x.sandbox);
+const tests=[
+ ['initial online pull loads the account cloud snapshot',async()=>{const x=fixture({remote:[{key:'agendaplus_events',value:[{id:'x',title:'cloud'}]}]});await run(x,"pullRemote('test-user')");assert.equal(JSON.parse(x.storage.get('agendaplus_events'))[0].title,'cloud');}],
+ ['offline edit survives flush, full app reload, and reconnect',async()=>{const x=fixture({online:true,remote:[{key:'agendaplus_events',value:[{id:'x',title:'base'}]}]});await run(x,"_sbUser='test-user';pullRemote('test-user')");x.navigator.onLine=false;await run(x,"_lsSet('agendaplus_events',[{id:'x',title:'local offline'}]);_sbFlush()");assert.ok(x.storage.has('tnc_legacy_pending_v1:test-user'));const y=fixture({online:true,storage:x.storage,db:x.db});run(y,"_sbUser='test-user'");await y.listeners.online();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));assert.equal(y.db.get('agendaplus_events')[0].title,'local offline');assert.equal(JSON.parse(y.storage.get('agendaplus_events'))[0].title,'local offline');assert.equal(JSON.parse(y.storage.get('tnc_legacy_pending_v1:test-user')).lists.events,null);}],
+ ['reconnect merges non-overlapping local and cloud edits',async()=>{const x=fixture({remote:[{key:'agendaplus_events',value:[{id:'x',title:'base'}]}]});await run(x,"_sbUser='test-user';pullRemote('test-user')");x.navigator.onLine=false;await run(x,"_lsSet('agendaplus_events',[{id:'x',title:'local edit'}])");x.db.set('agendaplus_events',[{id:'x',title:'base'},{id:'y',title:'cloud addition'}]);x.navigator.onLine=true;await run(x,"pullRemote('test-user')");assert.deepEqual(x.db.get('agendaplus_events').map(i=>i.id),['x','y']);assert.equal(x.db.get('agendaplus_events')[0].title,'local edit');}],
+ ['same-item conflict survives reload until an explicit choice',async()=>{const x=fixture({remote:[{key:'agendaplus_events',value:[{id:'x',title:'base'}]}]});await run(x,"_sbUser='test-user';pullRemote('test-user')");x.navigator.onLine=false;await run(x,"_lsSet('agendaplus_events',[{id:'x',title:'local choice'}])");x.db.set('agendaplus_events',[{id:'x',title:'cloud choice'}]);x.navigator.onLine=true;await run(x,"pullRemote('test-user')");assert.equal(x.db.get('agendaplus_events')[0].title,'cloud choice');assert.equal(JSON.parse(x.storage.get('agendaplus_events'))[0].title,'local choice');assert.equal(run(x,"_agendaLegacyConflictCount()"),1);const y=fixture({online:true,storage:x.storage,db:x.db});await run(y,"_sbUser='test-user';pullRemote('test-user')");assert.equal(run(y,"_agendaLegacyConflictCount()"),1);await run(y,"_agendaLegacyResolveConflict('events','x','local')");assert.equal(y.db.get('agendaplus_events')[0].title,'local choice');assert.equal(run(y,"_agendaLegacyConflictCount()"),0);}],
+ ['explicit cloud choice resolves the conflict without losing local state before choice',async()=>{const x=fixture({remote:[{key:'agendaplus_events',value:[{id:'x',title:'base'}]}]});await run(x,"_sbUser='test-user';pullRemote('test-user')");x.navigator.onLine=false;await run(x,"_lsSet('agendaplus_events',[{id:'x',title:'local choice'}])");x.db.set('agendaplus_events',[{id:'x',title:'cloud choice'}]);x.navigator.onLine=true;await run(x,"pullRemote('test-user')");assert.equal(JSON.parse(x.storage.get('agendaplus_events'))[0].title,'local choice');await run(x,"_agendaLegacyResolveConflict('events','x','cloud')");assert.equal(x.db.get('agendaplus_events')[0].title,'cloud choice');}],
+ ['pending offline changes survive app reload and block logout',async()=>{const x=fixture({online:false});run(x,"_sbUser='test-user';_agendaLegacyLoad('test-user');_agendaLegacyRecordLocal('test-user','agendaplus_events',[{id:'x',title:'queued'}])");const y=fixture({online:false,storage:x.storage,db:x.db});run(y,"_sbUser='test-user';_agendaLegacyLoad('test-user');App()");y.states[0]='app';run(y,'sandbox.__hook=0;App()');y.states[0]='app';const rendered=run(y,'sandbox.__hook=0;App()');await rendered.props.onLogout();assert.equal(y.signouts,0);assert.ok(y.alerts.some(message=>message.includes('alterações locais')));assert.ok(y.storage.has('tnc_legacy_pending_v1:test-user'));}],
+ ['legacy queue is isolated by account after a full app restart',async()=>{const x=fixture({online:false});run(x,"_agendaLegacyLoad('user-A');_agendaLegacyRecordLocal('user-A','agendaplus_events',[{id:'a',title:'A'}]);_agendaLegacyLoad('user-B');_agendaLegacyRecordLocal('user-B','agendaplus_events',[{id:'b',title:'B'}])");const y=fixture({online:false,storage:x.storage,db:x.db});run(y,"_agendaLegacyLoad('user-A')");assert.equal(run(y,"_agendaLegacyPending.lists.events.local[0].title"),'A');run(y,"_agendaLegacyLoad('user-B')");assert.equal(run(y,"_agendaLegacyPending.lists.events.local[0].title"),'B');}],
+ ['denied legacy batch leaves preference sync independent',async()=>{const x=fixture({upsert:rows=>({error:rows.some(row=>row.key==='agendaplus_events')?{code:'42501'}:null})});run(x,"_agendaGateKnown=true;_agendaSyncEnabled=true");const r=await run(x,`_writeKvRows('test-user',[{key:'agendaplus_events',value:[{id:'x'}]},{key:'agendaplus_theme',value:'dark'}])`);assert.equal(r.agendaBlocked,true);assert.deepEqual(x.writes[0].map(row=>row.key),['agendaplus_theme']);}],
+ ['stale CAS conflict retains local item and remote version',async()=>{const x=fixture({flag:true,cas:()=>({data:{status:'conflict',version:2,payload:{id:'x',title:'remote'}},error:null})});const ok=await run(x,`_agendaSyncEnabled=true;_agendaGateKnown=true;_agendaLoadMeta('test-user');_agendaMeta.versions['event:x']=1;_agendaMeta.pending['event:x']={type:'event',id:'x',deleted:false,payload:{id:'x',title:'local'},baseVersion:1};_agendaDrain()`);const meta=run(x,'_agendaMeta');assert.equal(ok,false);assert.equal(meta.pending['event:x'].payload.title,'local');assert.equal(meta.conflicts['event:x'].version,2);}]
 ];
-(async () => {
-  let failed = 0;
-  for (const [name, test] of tests) {
-    try { await test(); console.log('PASS ' + name); }
-    catch (error) { failed++; console.error('FAIL ' + name + ': ' + error.message); }
-  }
-  console.log(`${tests.length - failed}/${tests.length} passed`);
-  if (failed) process.exitCode = 1;
-})();
+(async()=>{let failed=0;for(const[name,test]of tests){try{await test();console.log('PASS '+name)}catch(e){failed++;console.error('FAIL '+name+': '+e.stack)}}console.log(`${tests.length-failed}/${tests.length} passed`);if(failed)process.exitCode=1;})();

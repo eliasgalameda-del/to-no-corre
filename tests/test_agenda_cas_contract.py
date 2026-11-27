@@ -132,7 +132,9 @@ class CompatibilityBuildTests(unittest.TestCase):
         self.assertIn('function _agendaIsBlockedWrite(error)', APP)
         self.assertIn('error.code === "42501"', APP)
         self.assertIn('const agendaRows = rows.filter((row) => _agendaIsLegacyKey(row.key))', APP)
-        self.assertIn('const retry = prefRows.length ? await SB.from("kv").upsert(prefRows', APP)
+        write_path = APP[APP.index('async function _writeKvRows'):APP.index('\nasync function _agendaResolveConflict', APP.index('async function _writeKvRows'))]
+        self.assertIn('const pref = prefRows.length ? await SB.from("kv").upsert(prefRows', write_path)
+        self.assertIn('const legacy = agendaRows.length ? await _agendaLegacySync(uidv)', write_path)
         self.assertIn('A nuvem bloqueou a gravação da agenda desta versão', APP)
         self.assertIn('Seus eventos e tarefas continuam neste aparelho', APP)
 
@@ -142,6 +144,19 @@ class CompatibilityBuildTests(unittest.TestCase):
         self.assertNotIn('agenda_migrate_legacy_items', pull)
         self.assertIn('if (!_agendaGateKnown)', pull)
         self.assertIn('filter((k) => !_agendaIsLegacyKey(k))', pull)
+
+    def test_legacy_pending_queue_is_persistent_and_account_scoped(self):
+        self.assertIn('const _agendaLegacyPendingKey = "tnc_legacy_pending_v1:"', APP)
+        self.assertIn('localStorage.setItem(_agendaLegacyPendingKey + _agendaLegacyPending.uid', APP)
+        self.assertIn('_agendaLegacyRecordLocal(_sbUser, key, val)', APP)
+        self.assertIn('async function _agendaLegacySync(uid)', APP)
+        self.assertIn('_agendaLegacyResolveConflict(type, id, "local")', APP)
+        self.assertIn('_agendaLegacyResolveConflict(type, id, "cloud")', APP)
+
+    def test_offline_listener_reconciles_legacy_and_normalized_queues(self):
+        listener = APP[APP.index('window.addEventListener("online"'):APP.index('\nfunction usePersist', APP.index('window.addEventListener("online"'))]
+        self.assertIn('_sbFlush()', listener)
+        self.assertIn('pullRemote(_sbUser)', listener)
 
     def test_offline_bootstrap_and_reconnect_keep_local_queue_retryable(self):
         self.assertIn('if (!navigator.onLine)', APP[APP.index('async function pullRemote(uidv) {'):])
