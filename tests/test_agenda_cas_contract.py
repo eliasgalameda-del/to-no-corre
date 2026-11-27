@@ -100,5 +100,26 @@ class SchedulerAndBarrierTests(unittest.TestCase):
         self.assertIn('or not public.agenda_sync_enabled()', sql)
         self.assertNotIn("agenda_sync_control.enabled = true", sql)
 
+    def test_reconciliation_sql_is_read_only_and_reports_metadata_only(self):
+        report = (ROOT / 'tests/sql/agenda_reconciliation_dry_run.sql').read_text()
+        statements = re.sub(r'--[^\n]*', '', report).lower()
+        self.assertRegex(statements, r'\bwith\b')
+        self.assertRegex(statements, r'\bselect\b')
+        self.assertNotRegex(statements, r'\b(insert\s+into|update\s+public|delete\s+from|alter\s+table|create\s+table|drop\s+table)\b')
+        self.assertIn("'feature_enabled'", report)
+        self.assertIn("'legacy_projection_checksum'", report)
+        self.assertIn("'normalized_projection_checksum'", report)
+        self.assertIn("'differing_field_names'", report)
+        self.assertIn("'legacy_invalid_rows'", report)
+        self.assertIn("'legacy_duplicate_ids'", report)
+        self.assertNotRegex(report, r"jsonb_build_object\(\s*'[^']*(title|desc|description)[^']*'")
+
+    def test_service_worker_is_not_a_stale_client_version_barrier(self):
+        worker = (ROOT / 'sw.js').read_text()
+        self.assertNotRegex(worker, r'addEventListener\(\s*[\"\']fetch')
+        self.assertNotIn('caches.', worker)
+        self.assertNotRegex(APP, r'\b(?:APP_VERSION|BUILD_ID|MINIMUM_APP_VERSION)\b')
+        self.assertIn('navigator.serviceWorker.register("sw.js")', APP)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
