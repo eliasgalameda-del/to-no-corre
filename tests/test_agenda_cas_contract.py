@@ -4,8 +4,15 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SQL = (ROOT / "agenda_cas_migration.sql").read_text()
-APP = (ROOT / "latest_index.html").read_text()
+MIGRATIONS = [
+    ROOT / "supabase/migrations/20261127122816_agenda_items_cas_sync_path.sql",
+    ROOT / "supabase/migrations/20261127123004_agenda_legacy_migration_no_stale_resurrection.sql",
+    ROOT / "supabase/migrations/20261127123040_agenda_items_service_role_cas_only.sql",
+    ROOT / "supabase/migrations/20261127123105_agenda_cas_reject_null_type.sql",
+]
+SQL = "\n".join(path.read_text() for path in MIGRATIONS) if all(path.exists() for path in MIGRATIONS) else (ROOT / "agenda_cas_migration.sql").read_text()
+APP_PATH = ROOT / "index.html" if (ROOT / "index.html").exists() else ROOT / "latest_index.html"
+APP = APP_PATH.read_text()
 
 class CasReference:
     def __init__(self):
