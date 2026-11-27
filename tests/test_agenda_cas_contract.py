@@ -82,6 +82,12 @@ class SchedulerAndBarrierTests(unittest.TestCase):
         self.assertIn('normalizedEnabled ? await loadNormalized(uid) : await loadLegacy(uid)', self.scheduler)
         self.assertIn('from("kv").select("key,value").eq("user_id", userId)', self.scheduler)
 
+    def test_scheduler_control_permission_is_select_only(self):
+        migration = (ROOT / 'supabase/migrations/20261127125000_agenda_scheduler_control_read.sql').read_text()
+        statements = re.sub(r'--[^\n]*', '', migration).strip().lower()
+        self.assertEqual(statements, 'grant select on public.agenda_sync_control to service_role;')
+        self.assertIn('revoke all on public.agenda_sync_control from public, anon, authenticated, service_role', SQL.lower())
+
     def test_scheduler_owner_scope_tombstones_and_settings(self):
         self.assertIn('from("agenda_items").select("item_type,item_id,payload").eq("user_id", userId)', self.scheduler)
         self.assertIn('from("kv").select("value").eq("user_id", userId).eq("key", "agendaplus_bdays")', self.scheduler)
