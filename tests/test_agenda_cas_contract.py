@@ -55,6 +55,9 @@ class AgendaCasContractTests(unittest.TestCase):
         self.assertIn('row.status === "conflict"', APP)
         self.assertIn("_agendaMeta.conflicts[key]", APP)
         self.assertIn('k !== "agendaplus_events" && k !== "agendaplus_tasks"', APP)
+        self.assertIn("_agendaStableStringify(localItem || null)", APP)
+        self.assertIn('_agendaResolveConflict(key, "local")', APP)
+        self.assertIn('_agendaResolveConflict(key, "server")', APP)
 
     def test_cutover_feature_flag_defaults_off(self):
         self.assertIn("values (true, false)", SQL)
