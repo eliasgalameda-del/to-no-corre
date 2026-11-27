@@ -3603,6 +3603,9 @@ async function pullRemote(uidv) {
     ["event", "task"].forEach((type) => {
       const storageKey = "agendaplus_" + (type === "event" ? "events" : "tasks");
       const localRaw = localStorage.getItem(storageKey);
+      // With no normalized rows, local/legacy data is not an empty cloud list.
+      // Keep it intact until an explicit migration/recovery decision is made.
+      if (!itemRows.length && localRaw !== null) return;
       let legacyLocal = null;
       try { legacyLocal = localRaw === null ? null : JSON.parse(localRaw); } catch (e) {}
       if (Array.isArray(legacyLocal) && itemRows.length) {
@@ -3657,6 +3660,9 @@ function App() {
   useEffect(() => {
     SB.auth.getSession().then(async (r) => {
       if (!r.data.session) { setState("login"); return; }
+      // A cached session can open local data offline. Do not treat a network
+      // failure as an invalid account or sign out before connectivity returns.
+      if (!navigator.onLine && r.data.session.user && r.data.session.user.id) { await start(r.data.session); return; }
       const u = await SB.auth.getUser();
       if (u.error || !u.data || !u.data.user) { await SB.auth.signOut(); setState("login"); return; }
       start(r.data.session);
