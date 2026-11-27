@@ -237,6 +237,9 @@ Deno.serve(pipeline(
         const input = listSchema.parse(args);
         const uid = await callerId();
         if (!uid) return failure('authentication_required');
+        const enabled = await syncEnabled();
+        if (enabled === null) return failure('agenda_sync_state_unavailable');
+        if (!enabled) return failure('agenda_sync_disabled');
         const { data, error } = await supabase.from('agenda_items')
           .select('item_type,item_id,payload,version,updated_at')
           .eq('user_id', uid)
