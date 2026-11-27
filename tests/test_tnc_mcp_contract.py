@@ -24,6 +24,12 @@ class McpAgendaContractTests(unittest.TestCase):
         self.assertNotIn("service_role", SOURCE)
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", SOURCE)
 
+    def test_listing_fails_closed_until_normalized_sync_is_enabled(self):
+        listing = SOURCE.split("server.registerTool('listar_itens_agenda'", 1)[1].split("server.registerTool('criar_item_agenda'", 1)[0]
+        self.assertIn("const enabled = await syncEnabled()", listing)
+        self.assertIn("if (enabled === null) return failure('agenda_sync_state_unavailable')", listing)
+        self.assertIn("if (!enabled) return failure('agenda_sync_disabled')", listing)
+
     def test_reads_are_caller_and_type_scoped_and_bounded(self):
         self.assertIn(".eq('user_id', uid)", SOURCE)
         self.assertIn(".eq('item_type', input.item_type)", SOURCE)
