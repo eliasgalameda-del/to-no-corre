@@ -148,6 +148,9 @@ class CompatibilityBuildTests(unittest.TestCase):
     def test_legacy_pending_queue_is_persistent_and_account_scoped(self):
         self.assertIn('const _agendaLegacyPendingKey = "tnc_legacy_pending_v1:"', APP)
         self.assertIn('localStorage.setItem(_agendaLegacyPendingKey + _agendaLegacyPending.uid', APP)
+        self.assertIn('localStorage.getItem(_agendaLegacyPendingKey + uid)', APP)
+        self.assertIn('entry.revision', APP)
+        self.assertIn('currentLocal', APP)
         self.assertIn('_agendaLegacyRecordLocal(_sbUser, key, val)', APP)
         self.assertIn('async function _agendaLegacySync(uid)', APP)
         self.assertIn('_agendaLegacyResolveConflict(type, id, "local")', APP)

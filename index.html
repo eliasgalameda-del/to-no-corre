@@ -2965,6 +2965,27 @@ function _agendaLoadMeta(uidv) {
   _agendaMeta.uid = uidv;
   _agendaSaveMeta();
 }
+async function _refreshAgendaGate(uidv) {
+  if (!navigator.onLine) { _agendaGateKnown = false; _agendaSyncNotice = "Sem conexão. A agenda local foi mantida; conecte-se e toque em Sincronizar agora."; _agendaNotify(); return false; }
+  try {
+    const result = await Promise.race([SB.rpc("agenda_sync_enabled"), new Promise((resolve) => setTimeout(() => resolve({ error: { message: "timeout" } }), 5000))]);
+    if (result.error || typeof result.data !== "boolean") throw result.error || new Error("invalid_flag");
+    _agendaSyncEnabled = result.data;
+    _agendaGateKnown = true;
+    if (_agendaSyncEnabled) {
+      _agendaLegacyBlocked = false;
+      _agendaSyncNotice = "";
+      _agendaLoadMeta(uidv);
+    } else if (!_agendaLegacyBlocked) _agendaSyncNotice = "";
+    _agendaNotify();
+    return true;
+  } catch (e) {
+    _agendaGateKnown = false;
+    _agendaSyncNotice = "Não foi possível confirmar o modo de sincronização. A agenda foi mantida neste aparelho; tente novamente quando estiver online.";
+    _agendaNotify();
+    return false;
+  }
+}
 function _agendaStatusText() {
   const pending = Object.keys(_agendaMeta.pending || {}).length;
   const conflicts = Object.keys(_agendaMeta.conflicts || {}).length + _agendaLegacyConflictCount();
@@ -3018,6 +3039,7 @@ function _agendaLegacyRecordLocal(uid, key, value) {
   let pending = _agendaLegacyPending.lists[type];
   if (!pending) pending = { base: _agendaLegacyBases.lists[type] || [], local: [], cloud: null, merged: null, conflicts: {}, needsCommit: false };
   pending.local = local;
+  pending.revision = Number(pending.revision || 0) + 1;
   _agendaLegacyPending.lists[type] = pending;
   _agendaLegacySave();
   _agendaNotify();
@@ -3098,10 +3120,11 @@ async function _agendaLegacySync(uid) {
         _agendaLegacyBases.lists[type] = cloud;
         continue;
       }
-      _agendaLegacyPending.lists[type] = { base: base.slice(), local, cloud: null, merged: null, conflicts: {}, needsCommit: false };
+      _agendaLegacyPending.lists[type] = { base: base.slice(), local, cloud: null, merged: null, conflicts: {}, needsCommit: false, revision: 0 };
     }
     const entry = _agendaLegacyPending.lists[type];
     entry.local = _agendaLegacyList(key, localStorage.getItem(key)) || entry.local || [];
+    const revisionBeforeMerge = Number(entry.revision || 0);
     if (entry.needsCommit) {
       if (_agendaStableStringify(cloud) !== _agendaStableStringify(entry.cloud || [])) {
         const fresh = _agendaLegacyMerge(entry.base || [], entry.local || [], cloud);
@@ -3109,6 +3132,7 @@ async function _agendaLegacySync(uid) {
         _agendaLegacySave();
         continue;
       }
+      if (Number(entry.revision || 0) !== revisionBeforeMerge) { entry.cloud = cloud; entry.needsCommit = false; _agendaLegacySave(); continue; }
       const up = await SB.from("kv").upsert([{ user_id: uid, key, value: entry.merged || [] }], { onConflict: "user_id,key" });
       if (up.error) { errors = up.error; continue; }
       cloud = entry.merged || [];
@@ -3120,6 +3144,7 @@ async function _agendaLegacySync(uid) {
       entry.conflicts = result.conflicts;
       entry.needsCommit = false;
       if (Object.keys(entry.conflicts).length) { _agendaLegacySave(); continue; }
+      if (Number(entry.revision || 0) !== revisionBeforeMerge) { entry.cloud = cloud; _agendaLegacySave(); continue; }
       if (_agendaStableStringify(entry.merged) !== _agendaStableStringify(cloud)) {
         const up = await SB.from("kv").upsert([{ user_id: uid, key, value: entry.merged }], { onConflict: "user_id,key" });
         if (up.error) { errors = up.error; _agendaLegacySave(); continue; }
@@ -3137,6 +3162,19 @@ async function _agendaLegacySync(uid) {
       entry.cloud = landedList || []; entry.merged = fresh.merged; entry.conflicts = fresh.conflicts; entry.needsCommit = false;
       _agendaLegacySave(); continue;
     }
+    const currentLocal = _agendaLegacyList(key, localStorage.getItem(key)) || entry.local || [];
+    if (Number(entry.revision || 0) !== revisionBeforeMerge || _agendaStableStringify(currentLocal) !== _agendaStableStringify(entry.local || [])) {
+      // Our just-written array is the new common base; keep the newer local
+      // snapshot queued and do not clear it merely because this write verified.
+      entry.base = expected;
+      entry.cloud = expected;
+      entry.local = currentLocal;
+      entry.merged = currentLocal;
+      entry.conflicts = {};
+      entry.needsCommit = false;
+      _agendaLegacySave();
+      continue;
+    }
     _agendaLegacyBases.lists[type] = expected;
     _agendaLegacyPending.lists[type] = null;
     try { localStorage.setItem(key, JSON.stringify(expected)); } catch (e) {}
@@ -3145,29 +3183,10 @@ async function _agendaLegacySync(uid) {
   _agendaNotify();
   return { error: errors, pending: Object.values(_agendaLegacyPending.lists).some(Boolean), conflicts: _agendaLegacyConflictCount() };
 }
-async function _refreshAgendaGate(uidv) {
-  if (!navigator.onLine) { _agendaGateKnown = false; _agendaSyncNotice = "Sem conexão. A agenda local foi mantida; conecte-se e toque em Sincronizar agora."; _agendaNotify(); return false; }
-  try {
-    const result = await Promise.race([SB.rpc("agenda_sync_enabled"), new Promise((resolve) => setTimeout(() => resolve({ error: { message: "timeout" } }), 5000))]);
-    if (result.error || typeof result.data !== "boolean") throw result.error || new Error("invalid_flag");
-    _agendaSyncEnabled = result.data;
-    _agendaGateKnown = true;
-    if (_agendaSyncEnabled) {
-      _agendaLegacyBlocked = false;
-      _agendaSyncNotice = "";
-      _agendaLoadMeta(uidv);
-    } else if (!_agendaLegacyBlocked) _agendaSyncNotice = "";
-    _agendaNotify();
-    return true;
-  } catch (e) {
-    _agendaGateKnown = false;
-    _agendaSyncNotice = "Não foi possível confirmar o modo de sincronização. A agenda foi mantida neste aparelho; tente novamente quando estiver online.";
-    _agendaNotify();
-    return false;
-  }
-}
+
 async function _writeKvRows(uidv, rows) {
   const agendaRows = rows.filter((row) => _agendaIsLegacyKey(row.key));
+  if (!_agendaGateKnown || !_agendaSyncEnabled) agendaRows.forEach((row) => _agendaLegacyRecordLocal(uidv, row.key, row.value));
   const prefRows = rows.filter((row) => !_agendaIsLegacyKey(row.key));
   const mustIsolate = !_agendaGateKnown || _agendaSyncEnabled || _agendaLegacyBlocked;
   if (mustIsolate) {
@@ -3450,9 +3469,16 @@ function ProfileView({ onLogout, counts }) {
         const entry = _agendaLegacyPending.lists[type];
         return entry ? Object.keys(entry.conflicts || {}).map((id) => {
           const conflict = entry.conflicts[id];
+          const describe = (item) => {
+            if (!item) return "(excluído)";
+            if (Array.isArray(item)) return item.length + " itens: " + item.slice(0, 4).map((x) => x && x.title ? x.title : String(x && x.id || "sem título")).join(", ");
+            return [item.title || "Sem título", item.date || item.deadline || "", item.time || ""].filter(Boolean).join(" · ");
+          };
           const label = id === "__entire_list__" ? "lista completa" : String((conflict.local && conflict.local.title) || (conflict.cloud && conflict.cloud.title) || id);
           return React.createElement("div", { key: "legacy:" + type + ":" + id, style: { marginTop: 8, padding: 9, borderRadius: 9, background: "#FFB45A12", border: "1px solid #FFB45A44" } },
             React.createElement("div", { style: { fontSize: 11, color: C.text, marginBottom: 7 } }, "Conflito legado — ", type === "events" ? "evento: " : "tarefa: ", label),
+            React.createElement("div", { style: { fontSize: 10, color: C.muted, marginBottom: 3, wordBreak: "break-word" } }, "Neste aparelho: ", describe(conflict.local)),
+            React.createElement("div", { style: { fontSize: 10, color: C.muted, marginBottom: 7, wordBreak: "break-word" } }, "Na nuvem: ", describe(conflict.cloud)),
             React.createElement("div", { style: { display: "flex", gap: 6 } },
               React.createElement("button", { onClick: () => _agendaLegacyResolveConflict(type, id, "local"), style: { flex: 1, padding: 7, borderRadius: 7, border: "1px solid #E2B96F", background: "transparent", color: "#E2B96F", fontSize: 11, cursor: "pointer" } }, "Manter local"),
               React.createElement("button", { onClick: () => _agendaLegacyResolveConflict(type, id, "cloud"), style: { flex: 1, padding: 7, borderRadius: 7, border: "1px solid #2D2D44", background: "transparent", color: C.text, fontSize: 11, cursor: "pointer" } }, "Usar nuvem")));
@@ -3893,7 +3919,10 @@ function App() {
       }
       await _sbFlush();
       Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0 || k === _agendaMetaKey).forEach((k) => localStorage.removeItem(k));
-      // Legacy pending/base keys are intentionally retained until verified cloud sync.
+      if (_sbUser) {
+        localStorage.removeItem(_agendaLegacyPendingKey + _sbUser);
+        localStorage.removeItem(_agendaLegacyBaseKey + _sbUser);
+      }
 
     } catch (e) {
       alert("Não consegui confirmar o salvamento. Seus dados locais foram preservados; tente novamente antes de sair.");
