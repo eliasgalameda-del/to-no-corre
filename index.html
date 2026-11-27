@@ -2943,18 +2943,93 @@ const SB = window.supabase.createClient("https://myuwytzbkckemcyfvhkx.supabase.c
 let _sbUser = null;
 const _sbQueue = {};
 let _sbTimer = null;
+const _agendaMetaKey = "tnc_agenda_sync_v1";
+let _agendaSyncEnabled = false;
+let _agendaMeta = { uid: null, versions: {}, pending: {}, conflicts: {} };
+let _agendaDraining = false;
+function _agendaItemKey(type, id) { return type + ":" + String(id); }
+function _agendaSaveMeta() { try { localStorage.setItem(_agendaMetaKey, JSON.stringify(_agendaMeta)); } catch (e) {} }
+function _agendaLoadMeta(uidv) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(_agendaMetaKey) || "null"); } catch (e) {}
+  _agendaMeta = saved && saved.uid === uidv && saved.versions && saved.pending ? saved : { uid: uidv, versions: {}, pending: {}, conflicts: {} };
+  _agendaMeta.conflicts = _agendaMeta.conflicts || {};
+  _agendaMeta.uid = uidv;
+  _agendaSaveMeta();
+}
+function _agendaStatusText() {
+  const pending = Object.keys(_agendaMeta.pending || {}).length;
+  const conflicts = Object.keys(_agendaMeta.conflicts || {}).length;
+  if (conflicts) return "Conflito de sincronização em " + conflicts + " item(ns). As alterações locais foram preservadas; sincronização pausada para esses itens.";
+  if (pending) return "" + pending + " alteração(ões) da agenda aguardando sincronização.";
+  return _agendaSyncEnabled ? "Agenda sincronizada por item." : "";
+}
+function _agendaNotify() { try { window.dispatchEvent(new Event("agenda-sync-update")); } catch (e) {} }
+function _agendaQueueListChange(type, before, after) {
+  if (!_agendaSyncEnabled || !_agendaMeta || !_agendaMeta.uid) return;
+  const prior = Array.isArray(before) ? before : [];
+  const next = Array.isArray(after) ? after : [];
+  const a = Object.create(null), b = Object.create(null);
+  prior.forEach((item) => { if (item && item.id !== void 0 && item.id !== null) a[String(item.id)] = item; });
+  next.forEach((item) => { if (item && item.id !== void 0 && item.id !== null && item._deleted !== true) b[String(item.id)] = item; });
+  const ids = new Set(Object.keys(a).concat(Object.keys(b)));
+  ids.forEach((id) => {
+    const key = _agendaItemKey(type, id);
+    if (JSON.stringify(a[id]) === JSON.stringify(b[id])) return;
+    const existing = _agendaMeta.pending[key];
+    _agendaMeta.pending[key] = { type, id, deleted: !b[id], payload: b[id] || null, baseVersion: existing ? existing.baseVersion : (_agendaMeta.versions[key] === void 0 ? null : _agendaMeta.versions[key]) };
+    delete _agendaMeta.conflicts[key];
+  });
+  if (ids.size) { _agendaSaveMeta(); _agendaNotify(); _agendaDrain(); }
+}
+async function _agendaDrain() {
+  if (!_agendaSyncEnabled || !_agendaMeta.uid || _agendaDraining || !navigator.onLine) return false;
+  _agendaDraining = true;
+  let ok = true;
+  try {
+    for (const key of Object.keys(_agendaMeta.pending)) {
+      if (_agendaMeta.conflicts[key]) continue;
+      const item = _agendaMeta.pending[key];
+      const sent = JSON.stringify(item);
+      const result = await SB.rpc("agenda_item_cas", { p_item_type: item.type, p_item_id: item.id, p_payload: item.payload, p_expected_version: item.baseVersion, p_is_delete: !!item.deleted });
+      if (result.error) { ok = false; console.error("agenda sync", result.error); break; }
+      const row = Array.isArray(result.data) ? result.data[0] : result.data;
+      if (!row || row.status === "not_found") { ok = false; break; }
+      if (row.status === "conflict") {
+        _agendaMeta.conflicts[key] = { version: row.version, payload: row.payload };
+        ok = false;
+        continue;
+      }
+      if (row.status !== "applied") { ok = false; break; }
+      _agendaMeta.versions[key] = Number(row.version);
+      if (_agendaMeta.pending[key] && JSON.stringify(_agendaMeta.pending[key]) === sent) delete _agendaMeta.pending[key];
+      else if (_agendaMeta.pending[key]) _agendaMeta.pending[key].baseVersion = Number(row.version);
+      delete _agendaMeta.conflicts[key];
+      _agendaSaveMeta();
+    }
+  } catch (e) { ok = false; console.error("agenda sync", e); }
+  _agendaDraining = false;
+  _agendaSaveMeta();
+  _agendaNotify();
+  return ok && !Object.keys(_agendaMeta.pending).length;
+}
 function _sbFlush() {
   _sbTimer = null;
   if (!_sbUser) return;
-  const rows = Object.keys(_sbQueue).map((k) => ({ user_id: _sbUser, key: k, value: _sbQueue[k], updated_at: new Date().toISOString() }));
-  Object.keys(_sbQueue).forEach((k) => delete _sbQueue[k]);
-  if (!rows.length) return;
-  SB.from("kv").upsert(rows, { onConflict: "user_id,key" }).then((r) => { if (r.error) console.error("sync", r.error); });
+  const keys = Object.keys(_sbQueue).filter((k) => !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks")));
+  const rows = keys.map((k) => ({ user_id: _sbUser, key: k, value: _sbQueue[k], updated_at: new Date().toISOString() }));
+  keys.forEach((k) => delete _sbQueue[k]);
+  if (Object.keys(_sbQueue).length) Object.keys(_sbQueue).filter((k) => _agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks")).forEach((k) => delete _sbQueue[k]);
+  if (rows.length) SB.from("kv").upsert(rows, { onConflict: "user_id,key" }).then((r) => { if (r.error) console.error("sync", r.error); });
+  if (_agendaSyncEnabled) _agendaDrain();
 }
 function _lsSet(key, val) {
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-  } catch (e) {
+  let before;
+  try { before = JSON.parse(localStorage.getItem(key) || "null"); } catch (e) {}
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+  if (_agendaSyncEnabled && (key === "agendaplus_events" || key === "agendaplus_tasks")) {
+    _agendaQueueListChange(key === "agendaplus_events" ? "event" : "task", before, val);
+    return;
   }
   if (_sbUser && key.indexOf("agendaplus_") === 0) {
     _sbQueue[key] = val;
@@ -2963,6 +3038,7 @@ function _lsSet(key, val) {
   }
 }
 window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") _sbFlush(); });
+window.addEventListener("online", () => { if (_agendaSyncEnabled) _agendaDrain(); });
 function usePersist(key, initVal) {
   const storageKey = "agendaplus_" + key;
   const [val, setValRaw] = useState(() => {
@@ -3049,16 +3125,25 @@ function ProfileView({ onLogout, counts }) {
   const email = user ? user.email : "...";
   const initial = (email[0] || "?").toUpperCase();
   const since = user && user.created_at ? new Date(user.created_at).toLocaleDateString("pt-BR") : "";
+  const [agendaMsg, setAgendaMsg] = useState("");
+  useEffect(() => {
+    const refresh = () => setAgendaMsg(_agendaStatusText());
+    window.addEventListener("agenda-sync-update", refresh); refresh();
+    return () => window.removeEventListener("agenda-sync-update", refresh);
+  }, []);
   const syncNow = async () => {
     setBusy(true); setStatus("");
     try {
+      if (_agendaSyncEnabled) await _agendaDrain();
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: user.id, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+        if (k && k.indexOf("agendaplus_") === 0 && !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks"))) { try { rows.push({ user_id: user.id, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
       }
-      const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" });
-      setStatus(r.error ? "Erro ao sincronizar: " + r.error.message : "\u2705 Tudo sincronizado (" + rows.length + " grupos de dados)");
+      const r = rows.length ? await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }) : { error: null };
+      const agendaText = _agendaSyncEnabled ? _agendaStatusText() : "";
+      setAgendaMsg(agendaText);
+      setStatus(r.error ? "Erro ao sincronizar: " + r.error.message : agendaText && !agendaText.startsWith("Agenda sincronizada") ? "Sincronização geral concluída; " + agendaText : "\u2705 Tudo sincronizado (" + rows.length + " grupos de dados)");
     } catch (e) { setStatus("Erro ao sincronizar."); }
     setBusy(false);
   };
@@ -3075,7 +3160,8 @@ function ProfileView({ onLogout, counts }) {
       React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 } }, "\u2601\uFE0F Sincroniza\u00E7\u00E3o"),
       React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Seus dados s\u00E3o salvos automaticamente na sua conta e aparecem em qualquer aparelho em que voc\u00EA entrar."),
       React.createElement("button", { onClick: syncNow, disabled: busy || !user, style: { width: "100%", padding: 12, borderRadius: 12, border: "1.5px solid " + C.accent, background: "transparent", color: C.accent, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", opacity: busy ? 0.6 : 1 } }, busy ? "Sincronizando..." : "Sincronizar agora"),
-      status && React.createElement("div", { style: { fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" } }, status)),
+      status && React.createElement("div", { style: { fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" } }, status),
+      agendaMsg && React.createElement("div", { style: { fontSize: 11, color: agendaMsg.indexOf("Conflito") >= 0 ? "#FFB45A" : C.muted, marginTop: 7, textAlign: "center" } }, agendaMsg)),
     React.createElement("div", { style: card },
       React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 } }, "\u{1F511} Conta"),
       React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Ao sair, seus dados continuam salvos na nuvem. Para entrar com outra conta, saia e fa\u00E7a o login de novo."),
@@ -3345,6 +3431,50 @@ function LoginScreen({ onDone }) {
       React.createElement("div", { style: { textAlign: "center", marginTop: 18, fontSize: 11, color: "#5d5a70" } }, "\u{1F512} Seus dados ficam salvos e protegidos na sua conta")));
 }
 async function pullRemote(uidv) {
+  const gate = await SB.rpc("agenda_sync_enabled");
+  if (gate.error) throw gate.error;
+  _agendaSyncEnabled = gate.data === true;
+  if (_agendaSyncEnabled) {
+    _agendaLoadMeta(uidv);
+    const imported = await SB.rpc("agenda_migrate_legacy_items");
+    if (imported.error) throw imported.error;
+    const r = await SB.from("kv").select("key,value").eq("user_id", uidv);
+    if (r.error) throw r.error;
+    const remote = {};
+    (r.data || []).forEach((x) => { remote[x.key] = x.value; });
+    Object.keys(remote).filter((k) => k !== "agendaplus_events" && k !== "agendaplus_tasks").forEach((k) => { try { localStorage.setItem(k, JSON.stringify(remote[k])); } catch (e) {} delete _memCache[k.replace("agendaplus_", "")]; });
+    const itemRows = [];
+    for (let offset = 0; ; offset += 1000) {
+      const page = await SB.from("agenda_items").select("item_type,item_id,payload,version").eq("user_id", uidv).range(offset, offset + 999);
+      if (page.error) throw page.error;
+      itemRows.push(...(page.data || []));
+      if (!page.data || page.data.length < 1000) break;
+    }
+    const lists = { event: [], task: [] };
+    _agendaMeta.versions = {};
+    itemRows.forEach((row) => {
+      const key = _agendaItemKey(row.item_type, row.item_id);
+      _agendaMeta.versions[key] = Number(row.version);
+      if (row.payload && row.payload._deleted !== true) lists[row.item_type].push(row.payload);
+    });
+    ["event", "task"].forEach((type) => {
+      const list = lists[type];
+      Object.keys(_agendaMeta.pending).forEach((key) => {
+        const pending = _agendaMeta.pending[key];
+        if (!pending || pending.type !== type) return;
+        const idx = list.findIndex((item) => String(item.id) === String(pending.id));
+        if (pending.deleted) { if (idx >= 0) list.splice(idx, 1); }
+        else if (idx >= 0) list[idx] = pending.payload;
+        else if (pending.payload) list.push(pending.payload);
+      });
+      try { localStorage.setItem("agendaplus_" + (type === "event" ? "events" : "tasks"), JSON.stringify(list)); } catch (e) {}
+      delete _memCache[type === "event" ? "events" : "tasks"];
+    });
+    _agendaSaveMeta();
+    _agendaNotify();
+    await _agendaDrain();
+    return;
+  }
   const r = await SB.from("kv").select("key,value").eq("user_id", uidv);
   if (r.error) throw r.error;
   const remote = {};
@@ -3380,13 +3510,17 @@ function App() {
   }, []);
   const logout = async () => {
     try {
+      if (_agendaSyncEnabled) {
+        const synced = await _agendaDrain();
+        if (!synced && !confirm("Há alterações da agenda pendentes ou em conflito. Se sair, elas serão mantidas apenas neste aparelho para esta conta. Sair mesmo assim?")) return;
+      }
       const rows = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && k.indexOf("agendaplus_") === 0) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
+        if (k && k.indexOf("agendaplus_") === 0 && !(_agendaSyncEnabled && (k === "agendaplus_events" || k === "agendaplus_tasks"))) { try { rows.push({ user_id: _sbUser, key: k, value: JSON.parse(localStorage.getItem(k)), updated_at: new Date().toISOString() }); } catch (e) {} }
       }
       if (rows.length) { const r = await SB.from("kv").upsert(rows, { onConflict: "user_id,key" }); if (r.error) {
-        if (!confirm("N\u00E3o consegui salvar seus dados na nuvem. Sair mesmo assim? Seus dados continuam guardados neste aparelho.")) return;
+        if (!confirm("Não consegui salvar seus dados na nuvem. Sair mesmo assim? Seus dados continuam guardados neste aparelho.")) return;
         await SB.auth.signOut(); _sbUser = null; location.reload(); return;
       } }
       Object.keys(localStorage).filter((k) => k.indexOf("agendaplus_") === 0).forEach((k) => localStorage.removeItem(k));
