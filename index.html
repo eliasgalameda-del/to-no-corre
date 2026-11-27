@@ -2948,6 +2948,11 @@ let _agendaSyncEnabled = false;
 let _agendaMeta = { uid: null, versions: {}, pending: {}, conflicts: {} };
 let _agendaDraining = false;
 function _agendaItemKey(type, id) { return type + ":" + String(id); }
+function _agendaStableStringify(value) {
+  if (Array.isArray(value)) return "[" + value.map(_agendaStableStringify).join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + _agendaStableStringify(value[key])).join(",") + "}";
+  return JSON.stringify(value);
+}
 function _agendaSaveMeta() { try { localStorage.setItem(_agendaMetaKey, JSON.stringify(_agendaMeta)); } catch (e) {} }
 function _agendaLoadMeta(uidv) {
   let saved = null;
@@ -2965,6 +2970,33 @@ function _agendaStatusText() {
   return _agendaSyncEnabled ? "Agenda sincronizada por item." : "";
 }
 function _agendaNotify() { try { window.dispatchEvent(new Event("agenda-sync-update")); } catch (e) {} }
+async function _agendaResolveConflict(key, choice) {
+  const conflict = _agendaMeta.conflicts[key];
+  const pending = _agendaMeta.pending[key];
+  if (!conflict || !pending) return;
+  if (choice === "server") {
+    delete _agendaMeta.pending[key];
+    delete _agendaMeta.conflicts[key];
+    if (conflict.version !== null && conflict.version !== void 0) _agendaMeta.versions[key] = Number(conflict.version);
+    else delete _agendaMeta.versions[key];
+    const storageKey = "agendaplus_" + (pending.type === "event" ? "events" : "tasks");
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(storageKey) || "[]"); } catch (e) {}
+    if (!Array.isArray(list)) list = [];
+    const idx = list.findIndex((item) => String(item.id) === String(pending.id));
+    if (!conflict.payload || conflict.payload._deleted === true) { if (idx >= 0) list.splice(idx, 1); }
+    else if (idx >= 0) list[idx] = conflict.payload;
+    else list.push(conflict.payload);
+    try { localStorage.setItem(storageKey, JSON.stringify(list)); } catch (e) {}
+  } else {
+    pending.baseVersion = conflict.version === void 0 ? null : conflict.version;
+    delete _agendaMeta.conflicts[key];
+  }
+  _agendaSaveMeta();
+  _agendaNotify();
+  if (choice === "local") await _agendaDrain();
+  location.reload();
+}
 function _agendaQueueListChange(type, before, after) {
   if (!_agendaSyncEnabled || !_agendaMeta || !_agendaMeta.uid) return;
   const prior = Array.isArray(before) ? before : [];
@@ -2978,7 +3010,6 @@ function _agendaQueueListChange(type, before, after) {
     if (JSON.stringify(a[id]) === JSON.stringify(b[id])) return;
     const existing = _agendaMeta.pending[key];
     _agendaMeta.pending[key] = { type, id, deleted: !b[id], payload: b[id] || null, baseVersion: existing ? existing.baseVersion : (_agendaMeta.versions[key] === void 0 ? null : _agendaMeta.versions[key]) };
-    delete _agendaMeta.conflicts[key];
   });
   if (ids.size) { _agendaSaveMeta(); _agendaNotify(); _agendaDrain(); }
 }
@@ -3161,7 +3192,15 @@ function ProfileView({ onLogout, counts }) {
       React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Seus dados s\u00E3o salvos automaticamente na sua conta e aparecem em qualquer aparelho em que voc\u00EA entrar."),
       React.createElement("button", { onClick: syncNow, disabled: busy || !user, style: { width: "100%", padding: 12, borderRadius: 12, border: "1.5px solid " + C.accent, background: "transparent", color: C.accent, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", opacity: busy ? 0.6 : 1 } }, busy ? "Sincronizando..." : "Sincronizar agora"),
       status && React.createElement("div", { style: { fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" } }, status),
-      agendaMsg && React.createElement("div", { style: { fontSize: 11, color: agendaMsg.indexOf("Conflito") >= 0 ? "#FFB45A" : C.muted, marginTop: 7, textAlign: "center" } }, agendaMsg)),
+      agendaMsg && React.createElement("div", { style: { fontSize: 11, color: agendaMsg.indexOf("Conflito") >= 0 ? "#FFB45A" : C.muted, marginTop: 7, textAlign: "center" } }, agendaMsg),
+      _agendaSyncEnabled && Object.keys(_agendaMeta.conflicts || {}).slice(0, 5).map((key) => {
+        const pending = _agendaMeta.pending[key];
+        return React.createElement("div", { key, style: { marginTop: 8, padding: 9, borderRadius: 9, background: "#FFB45A12", border: "1px solid #FFB45A44" } },
+          React.createElement("div", { style: { fontSize: 11, color: C.text, marginBottom: 7 } }, "Conflito em ", pending ? pending.type : "item", " ", pending ? pending.id : key),
+          React.createElement("div", { style: { display: "flex", gap: 6 } },
+            React.createElement("button", { onClick: () => _agendaResolveConflict(key, "local"), style: { flex: 1, padding: 7, borderRadius: 7, border: "1px solid #E2B96F", background: "transparent", color: "#E2B96F", fontSize: 11, cursor: "pointer" } }, "Manter local"),
+            React.createElement("button", { onClick: () => _agendaResolveConflict(key, "server"), style: { flex: 1, padding: 7, borderRadius: 7, border: "1px solid #2D2D44", background: "transparent", color: C.text, fontSize: 11, cursor: "pointer" } }, "Usar nuvem")));
+      })),
     React.createElement("div", { style: card },
       React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 } }, "\u{1F511} Conta"),
       React.createElement("div", { style: { fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 } }, "Ao sair, seus dados continuam salvos na nuvem. Para entrar com outra conta, saia e fa\u00E7a o login de novo."),
@@ -3451,13 +3490,33 @@ async function pullRemote(uidv) {
       if (!page.data || page.data.length < 1000) break;
     }
     const lists = { event: [], task: [] };
+    const serverRows = { event: Object.create(null), task: Object.create(null) };
     _agendaMeta.versions = {};
     itemRows.forEach((row) => {
       const key = _agendaItemKey(row.item_type, row.item_id);
       _agendaMeta.versions[key] = Number(row.version);
+      serverRows[row.item_type][String(row.item_id)] = row;
       if (row.payload && row.payload._deleted !== true) lists[row.item_type].push(row.payload);
     });
     ["event", "task"].forEach((type) => {
+      const storageKey = "agendaplus_" + (type === "event" ? "events" : "tasks");
+      let legacyLocal = null;
+      try { legacyLocal = JSON.parse(localStorage.getItem(storageKey) || "null"); } catch (e) {}
+      if (Array.isArray(legacyLocal) && itemRows.length) {
+        const localById = Object.create(null);
+        legacyLocal.forEach((item) => { if (item && item.id !== void 0 && item.id !== null) localById[String(item.id)] = item; });
+        const ids = new Set(Object.keys(localById).concat(Object.keys(serverRows[type])));
+        ids.forEach((id) => {
+          const key = _agendaItemKey(type, id);
+          if (_agendaMeta.pending[key]) return;
+          const remoteRow = serverRows[type][id];
+          const localItem = localById[id];
+          const remoteItem = remoteRow && remoteRow.payload && remoteRow.payload._deleted !== true ? remoteRow.payload : null;
+          if (_agendaStableStringify(localItem || null) === _agendaStableStringify(remoteItem || null)) return;
+          _agendaMeta.pending[key] = { type, id, deleted: !localItem, payload: localItem || null, baseVersion: remoteRow ? Number(remoteRow.version) : null };
+          _agendaMeta.conflicts[key] = { version: remoteRow ? Number(remoteRow.version) : null, payload: remoteRow ? remoteRow.payload : null };
+        });
+      }
       const list = lists[type];
       Object.keys(_agendaMeta.pending).forEach((key) => {
         const pending = _agendaMeta.pending[key];
