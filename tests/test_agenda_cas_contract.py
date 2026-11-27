@@ -70,6 +70,26 @@ class AgendaCasContractTests(unittest.TestCase):
         self.assertIn("values (true, false)", SQL)
         self.assertIn('SB.rpc("agenda_sync_enabled")', APP)
 
+class LegacyAtomicCutoffContractTests(unittest.TestCase):
+    def test_rpc_atomicity_flag_lock_and_identity(self):
+        sql = (ROOT / "supabase/migrations/20261127130000_agenda_legacy_kv_cas.sql").read_text().lower()
+        self.assertIn("auth.uid()", sql)
+        self.assertIn("k.user_id = v_uid", sql)
+        self.assertIn("k.value is not distinct from p_expected_value", sql)
+        self.assertIn("on conflict (user_id,key) do nothing", sql)
+        self.assertIn("for share", sql)
+        self.assertIn("'status','blocked'", sql)
+        self.assertIn("from public, anon, service_role", sql)
+        self.assertIn('SB.rpc("agenda_legacy_kv_cas"', APP)
+
+    def test_cutoff_restricts_direct_array_dml_even_with_flag_off(self):
+        sql = (ROOT / "supabase/migrations/20261127131000_agenda_legacy_atomic_cutoff.sql").read_text().lower()
+        self.assertEqual(sql.count("as restrictive for"), 3)
+        self.assertIn("for insert", sql)
+        self.assertIn("for update", sql)
+        self.assertIn("for delete", sql)
+        self.assertNotIn("agenda_sync_enabled()", sql)
+
 class SchedulerAndBarrierTests(unittest.TestCase):
     def setUp(self):
         self.scheduler = (ROOT / "supabase/functions/scheduler/index.ts").read_text()

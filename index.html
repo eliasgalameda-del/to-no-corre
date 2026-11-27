@@ -3070,6 +3070,19 @@ function _agendaLegacyMerge(base, local, cloud) {
   }
   return { merged, conflicts };
 }
+async function _agendaLegacyCasWrite(uid, key, expectedExists, expectedValue, newValue) {
+  const result = await SB.rpc("agenda_legacy_kv_cas", {
+    p_key: key,
+    p_expected_exists: !!expectedExists,
+    p_expected_value: expectedExists ? expectedValue : null,
+    p_new_value: newValue,
+  });
+  if (result.error) return { status: "error", error: result.error };
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
+  if (!row || !["applied", "conflict", "blocked"].includes(row.status)) return { status: "error", error: { message: "invalid_agenda_legacy_cas_response" } };
+  return row;
+}
+
 function _agendaLegacyConflictCount() {
   return Object.values(_agendaLegacyPending.lists || {}).reduce((sum, entry) => sum + (entry ? Object.keys(entry.conflicts || {}).length : 0), 0);
 }
@@ -3101,8 +3114,14 @@ async function _agendaLegacySync(uid) {
   for (const type of ["events", "tasks"]) {
     const key = "agendaplus_" + type;
     const pending = _agendaLegacyPending.lists[type];
-    let cloud = Object.prototype.hasOwnProperty.call(remote, key) ? _agendaLegacyList(key, remote[key]) : [];
-    if (!cloud) cloud = [];
+    const cloudExists = Object.prototype.hasOwnProperty.call(remote, key);
+    let cloud = cloudExists ? _agendaLegacyList(key, remote[key]) : [];
+    if (!cloud) {
+      errors = { message: "invalid_legacy_cloud_array" };
+      _agendaSyncNotice = "A lista da nuvem está em formato inválido. A cópia local foi mantida; não saia da conta antes de verificar.";
+      _agendaLegacySave();
+      continue;
+    }
     if (!pending) {
       const localRaw = localStorage.getItem(key);
       if (localRaw === null) {
@@ -3133,8 +3152,17 @@ async function _agendaLegacySync(uid) {
         continue;
       }
       if (Number(entry.revision || 0) !== revisionBeforeMerge) { entry.cloud = cloud; entry.needsCommit = false; _agendaLegacySave(); continue; }
-      const up = await SB.from("kv").upsert([{ user_id: uid, key, value: entry.merged || [] }], { onConflict: "user_id,key" });
-      if (up.error) { errors = up.error; continue; }
+      const cas = await _agendaLegacyCasWrite(uid, key, cloudExists, cloud, entry.merged || []);
+      if (cas.status === "error") { errors = cas.error; continue; }
+      if (cas.status !== "applied") {
+        if (cas.status === "blocked") { errors = { code: "42501", message: "legacy agenda writes are blocked" }; _agendaLegacySave(); continue; }
+        const current = cas.current_exists ? _agendaLegacyList(key, cas.current_value) : [];
+        if (!current) { errors = { message: "invalid_legacy_cloud_array" }; _agendaLegacySave(); continue; }
+        const fresh = _agendaLegacyMerge(entry.base || [], entry.local || [], current);
+        entry.cloud = current; entry.merged = fresh.merged; entry.conflicts = fresh.conflicts; entry.needsCommit = false;
+        _agendaLegacySave();
+        continue;
+      }
       cloud = entry.merged || [];
     } else {
       if (entry.conflicts && Object.keys(entry.conflicts).length && _agendaStableStringify(cloud) === _agendaStableStringify(entry.cloud || [])) continue;
@@ -3146,8 +3174,16 @@ async function _agendaLegacySync(uid) {
       if (Object.keys(entry.conflicts).length) { _agendaLegacySave(); continue; }
       if (Number(entry.revision || 0) !== revisionBeforeMerge) { entry.cloud = cloud; _agendaLegacySave(); continue; }
       if (_agendaStableStringify(entry.merged) !== _agendaStableStringify(cloud)) {
-        const up = await SB.from("kv").upsert([{ user_id: uid, key, value: entry.merged }], { onConflict: "user_id,key" });
-        if (up.error) { errors = up.error; _agendaLegacySave(); continue; }
+        const cas = await _agendaLegacyCasWrite(uid, key, cloudExists, cloud, entry.merged);
+        if (cas.status === "error") { errors = cas.error; _agendaLegacySave(); continue; }
+        if (cas.status !== "applied") {
+          if (cas.status === "blocked") { errors = { code: "42501", message: "legacy agenda writes are blocked" }; _agendaLegacySave(); continue; }
+          const current = cas.current_exists ? _agendaLegacyList(key, cas.current_value) : [];
+          if (!current) { errors = { message: "invalid_legacy_cloud_array" }; _agendaLegacySave(); continue; }
+          const fresh = _agendaLegacyMerge(entry.base || [], entry.local || [], current);
+          entry.cloud = current; entry.merged = fresh.merged; entry.conflicts = fresh.conflicts; entry.needsCommit = false;
+          _agendaLegacySave(); continue;
+        }
         cloud = entry.merged;
       }
     }
