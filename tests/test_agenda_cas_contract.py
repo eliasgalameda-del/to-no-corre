@@ -70,5 +70,34 @@ class AgendaCasContractTests(unittest.TestCase):
         self.assertIn("values (true, false)", SQL)
         self.assertIn('SB.rpc("agenda_sync_enabled")', APP)
 
+class SchedulerAndBarrierTests(unittest.TestCase):
+    def setUp(self):
+        self.scheduler = (ROOT / "supabase/functions/scheduler/index.ts").read_text()
+        self.barrier = (ROOT / "supabase/migrations/20261127123500_agenda_legacy_kv_write_barrier.sql").read_text()
+
+    def test_scheduler_switches_on_flag_and_fails_closed(self):
+        self.assertIn('from("agenda_sync_control").select("enabled").eq("singleton", true)', self.scheduler)
+        self.assertIn("if (controlError) throw controlError", self.scheduler)
+        self.assertIn('normalizedEnabled ? await loadNormalized(uid) : await loadLegacy(uid)', self.scheduler)
+        self.assertIn('from("kv").select("key,value").eq("user_id", userId)', self.scheduler)
+
+    def test_scheduler_owner_scope_tombstones_and_settings(self):
+        self.assertIn('from("agenda_items").select("item_type,item_id,payload").eq("user_id", userId)', self.scheduler)
+        self.assertIn('from("kv").select("value").eq("user_id", userId).eq("key", "agendaplus_bdays")', self.scheduler)
+        self.assertIn('payload._deleted === true', self.scheduler)
+        self.assertIn('t._deleted !== true', self.scheduler)
+        self.assertIn('req.headers.get("x-cron-key") !== m.cron_key', self.scheduler)
+        self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", self.scheduler.split("Deno.serve")[1])
+
+    def test_staged_barrier_preserves_reads_and_blocks_only_two_agenda_keys_when_enabled(self):
+        sql = self.barrier.lower()
+        self.assertIn('for select to authenticated', sql)
+        self.assertIn('for insert to authenticated', sql)
+        self.assertIn('for update to authenticated', sql)
+        self.assertIn('for delete to authenticated', sql)
+        self.assertIn("key not in ('agendaplus_events', 'agendaplus_tasks')", sql)
+        self.assertIn('or not public.agenda_sync_enabled()', sql)
+        self.assertNotIn("agenda_sync_control.enabled = true", sql)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
