@@ -103,7 +103,7 @@ const STA = {
 };
 const uid = () => Math.random().toString(36).slice(2, 9);
 const today = /* @__PURE__ */ new Date();
-const fmtD = (d) => d.toISOString().split("T")[0];
+const fmtD = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 const addD = (d, n) => {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
@@ -2177,6 +2177,15 @@ function tncBot(msgRaw, data, pending, nowArg) {
 
   // ---------- pendencia (esclarecimentos) ----------
   if (pending) {
+    if (pending.kind === "overdue") {
+      if (/\b(nao|deixa|esquece|depois)\b/.test(n)) return R("Beleza, deixo como est\u00E1. \u{1F44D}");
+      if (/\b(sim|quero|pode|remarc\w*|adiar|hoje|amanha|tudo|ok|isso|claro)\b/.test(n) || dts.single) {
+        const target = dts.single || todayIso;
+        const ids = pending.ids.filter((id) => tasks.some((t) => t.id === id));
+        if (!ids.length) return R("As atrasadas j\u00E1 foram resolvidas. \u{1F389}");
+        return R("\u{1F4C5} Remarquei **" + ids.length + " tarefa(s) atrasada(s)** para " + _bFmt(target) + ".", { actions: ids.map((id) => ({ type: "moveTask", id, date: target })) });
+      }
+    }
     if (pending.kind === "choose") {
       let picks = [];
       if (/\b(todos|todas|tudo)\b/.test(n)) picks = pending.opts;
@@ -2226,7 +2235,7 @@ function tncBot(msgRaw, data, pending, nowArg) {
 
   // ---------- ajuda / saudacao ----------
   if (/\b(ajuda|help|comandos|o que (voce|vc) (faz|sabe|consegue))\b/.test(n)) {
-    return R("Eu cuido de tudo do app. Exemplos:\n\u2022 **O que tenho hoje / amanh\u00E3 / essa semana?**\n\u2022 **Pr\u00F3ximo compromisso**\n\u2022 **Tarefas pendentes / atrasadas / conclu\u00EDdas**\n\u2022 **Criar evento dentista sexta 15h**\n\u2022 **Criar tarefa entregar relat\u00F3rio dia 30 urgente**\n\u2022 **Todo dia academia 7h** (evento recorrente)\n\u2022 **Cancelar dentista** / **Concluir relat\u00F3rio**\n\u2022 **Remarcar dentista para segunda 10h**\n\u2022 **Quando \u00E9 a prova de c\u00E1lculo?**\n\u2022 **H\u00E1bitos**, **faltas e notas**, **anivers\u00E1rios**, **resumo**");
+    return R("Eu cuido de tudo do app. Exemplos:\n\u2022 **O que tenho hoje / amanh\u00E3 / essa semana?**\n\u2022 **Pr\u00F3ximo compromisso**\n\u2022 **Tarefas pendentes / atrasadas / conclu\u00EDdas**\n\u2022 **Criar evento dentista sexta 15h**\n\u2022 **Criar tarefa entregar relat\u00F3rio dia 30 urgente**\n\u2022 **Todo dia academia 7h** (evento recorrente)\n\u2022 **Cancelar dentista** / **Concluir relat\u00F3rio**\n\u2022 **Remarcar dentista para segunda 10h**\n\u2022 **Quando \u00E9 a prova de c\u00E1lculo?**\n\u2022 **Remarcar atrasadas** para hoje\n\u2022 **Revis\u00E3o da semana**\n\u2022 **H\u00E1bitos**, **faltas e notas**, **anivers\u00E1rios**, **resumo**");
   }
 
   // ---------- cancelar ----------
@@ -2241,6 +2250,26 @@ function tncBot(msgRaw, data, pending, nowArg) {
     if (!opts.length) return R("N\u00E3o encontrei nada com isso. \u{1F50D} Diga o nome do compromisso ou da tarefa como est\u00E1 no app.");
     if (opts.length === 1) return applyChoice("cancel", opts, {});
     return R("Achei mais de um. Qual cancelo? (responda o n\u00FAmero, ou **todos**)\n" + opts.map((o, i) => (i + 1) + ". " + o.label).join("\n"), { pending: { kind: "choose", action: "cancel", opts } });
+  }
+
+  // ---------- remarcar atrasadas ----------
+  if (/\b(remarc\w*|adiar|adie|mover|mova|passar|passa)\b/.test(n) && /\batrasad\w*/.test(n)) {
+    const od = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline < todayIso);
+    if (!od.length) return R("Nenhuma tarefa atrasada. \u{1F389}");
+    const target = dts.single || todayIso;
+    return R("\u{1F4C5} Remarquei **" + od.length + " tarefa(s) atrasada(s)** para " + _bFmt(target) + ".", { actions: od.map((t) => ({ type: "moveTask", id: t.id, date: target })) });
+  }
+
+  // ---------- revisao da semana ----------
+  if (/\b(revisao|balanco|retrospectiva)\b/.test(n)) {
+    const from = _bLocal(_bAddD(now, -6)), toIso = _bLocal(_bAddD(now, 7));
+    const ex = _bExpand(events, now).filter((e) => !e.done);
+    const past = ex.filter((e) => e.date >= from && e.date <= todayIso).length;
+    const fin = tasks.filter((t) => t.status === "done" && t.deadline && t.deadline >= from && t.deadline <= todayIso);
+    const od = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline < todayIso);
+    const nextEv = ex.filter((e) => e.date > todayIso && e.date <= toIso).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    const nextTk = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline > todayIso && t.deadline <= toIso);
+    return R("\u{1F4CB} **Revis\u00E3o da semana**\n\u2705 Conclu\u00EDdas com prazo na semana: " + fin.length + (fin.length ? " (" + fin.slice(0, 3).map((t) => t.title).join(", ") + ")" : "") + "\n\u{1F4C5} Compromissos nos \u00FAltimos 7 dias: " + past + "\n" + (od.length ? "\u26A0\uFE0F Ficou para tr\u00E1s: " + od.slice(0, 4).map((t) => t.title).join(", ") + (od.length > 4 ? " +" + (od.length - 4) : "") : "\u{1F389} Nada atrasado") + "\n\n\u27A1\uFE0F **Pr\u00F3ximos 7 dias:** " + nextEv.length + " compromisso(s), " + nextTk.length + " prazo(s)" + (nextEv.length ? "\n" + nextEv.slice(0, 5).map((e) => "\u2022 " + _bFmt(e.date) + " " + (e.time && e.time !== "00:00" ? e.time + " " : "") + e.title).join("\n") : ""));
   }
 
   // ---------- remarcar ----------
@@ -2353,6 +2382,7 @@ function tncBot(msgRaw, data, pending, nowArg) {
     if (kws.length) list = list.filter((t) => _bMatch(t.title, kws));
     list = list.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
     if (!list.length) return R("\u2705 **" + title + "**: nenhuma. \u{1F389}");
+    if (title.indexOf("atrasadas") >= 0) return R("\u2705 **" + title + "** (" + list.length + ")\n" + list.slice(0, 15).map(tkLine).join("\n") + "\n\nQuer que eu remarque todas para hoje?", { pending: { kind: "overdue", ids: list.map((t) => t.id) } });
     return R("\u2705 **" + title + "** (" + list.length + ")\n" + list.slice(0, 15).map(tkLine).join("\n") + (list.length > 15 ? "\n... e mais " + (list.length - 15) : ""));
   }
   if (/\b(compromisso\w*|evento\w*|agenda|reuniao|reunioes|marcado|programad\w*|o que (eu )?tenho|tenho (algo|alguma))\b/.test(n) || (range && !addCmd)) {
@@ -2723,6 +2753,18 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
     try { rec.start(); } catch (err) { setTimeout(startWakeWord, 800); }
   };
   const startVoiceCommand = () => { stopWakeWord(); startDictation(""); };
+  useEffect(() => {
+    if (window.__overdueGreeted) return;
+    const iso = fmtD(new Date());
+    const od = tasks.filter((t) => t.status !== "done" && t.deadline && t.deadline < iso);
+    if (!od.length || !_lsGet("agendaplus_ai_user")) return;
+    window.__overdueGreeted = true;
+    const timer = setTimeout(() => {
+      pendingRef.current = { kind: "overdue", ids: od.map((t) => t.id) };
+      setMessages((p) => [...p, { role: "assistant", content: "\u26A0\uFE0F Voc\u00EA tem **" + od.length + " tarefa(s) atrasada(s)**:\n" + od.slice(0, 5).map((t) => "\u2022 " + t.title).join("\n") + "\n\nQuer que eu remarque todas para hoje? (responda **sim**, ou diga outro dia)" }]);
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
   const lastMsgCount = useRef(0);
   useEffect(() => {
     const msgs = messages.filter((m) => m.role === "assistant");
@@ -2852,6 +2894,7 @@ Posso criar eventos, tarefas, aniversarios ou responder sobre sua agenda. O que 
   )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: C.muted, textAlign: "center", marginTop: 3 } }, "\u{1F3A4} Segurar para falar \xB7 Enter para enviar"))), /* @__PURE__ */ React.createElement("style", null, `@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}`));
 }
 const TABS = [
+  { id: "today", label: "Hoje", icon: "\u2600\uFE0F" },
   { id: "dashboard", label: "Inicio", icon: "\u{1F3E0}" },
   { id: "ai", label: "IA", icon: "\u{1F916}" },
   { id: "calendar", label: "Agenda", icon: "\u{1F4C5}" },
@@ -3049,8 +3092,81 @@ function ProfileView({ onLogout, counts }) {
           React.createElement("button", { onClick: () => { setDelStep(0); setDelText(""); setDelMsg(""); }, style: { flex: 1, padding: 12, borderRadius: 12, border: "1.5px solid " + C.border, background: "transparent", color: C.text, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Cancelar")))),
     React.createElement("div", { style: { textAlign: "center", fontSize: 10, color: "#5d5a70" } }, "T\u00F4 no Corre"));
 }
+function TodayView({ events, tasks, setTasks, habits, setHabits, sugs }) {
+  const now = new Date();
+  const iso = fmtD(now);
+  const pad = (n) => String(n).padStart(2, "0");
+  const nowT = pad(now.getHours()) + ":" + pad(now.getMinutes());
+  const [rev, setRev] = useState(false);
+  const exp = expandRecurring(events).filter((e) => e.date === iso && !e.done).sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  const open = tasks.filter((t) => t.status !== "done");
+  const overdue = open.filter((t) => t.deadline && t.deadline < iso).sort((a, b) => a.deadline.localeCompare(b.deadline));
+  const dueToday = tasks.filter((t) => t.deadline === iso);
+  const hb = habits || [];
+  const doneCount = dueToday.filter((t) => t.status === "done").length + hb.filter((h) => h.log && h.log[iso]).length;
+  const totalCount = dueToday.length + hb.length;
+  const pct = totalCount ? Math.round(doneCount / totalCount * 100) : 0;
+  const nextIdx = exp.findIndex((e) => e.time >= nowT && e.time !== "00:00");
+  const greet = now.getHours() < 12 ? "Bom dia" : now.getHours() < 18 ? "Boa tarde" : "Boa noite";
+  const uname = _lsGet("agendaplus_ai_user") || "";
+  const toggleTask = (id) => setTasks((p) => p.map((t) => t.id === id ? Object.assign({}, t, { status: t.status === "done" ? "todo" : "done" }) : t));
+  const moveToday = (id) => setTasks((p) => p.map((t) => t.id === id ? Object.assign({}, t, { deadline: iso }) : t));
+  const moveAll = () => setTasks((p) => p.map((t) => t.status !== "done" && t.deadline && t.deadline < iso ? Object.assign({}, t, { deadline: iso }) : t));
+  const toggleHabit = (id) => setHabits((p) => p.map((h) => {
+    if (h.id !== id) return h;
+    const was = !!(h.log || {})[iso];
+    const log = Object.assign({}, h.log || {});
+    if (was) delete log[iso]; else log[iso] = true;
+    return Object.assign({}, h, { log, streak: was ? Math.max(0, (h.streak || 0) - 1) : (h.streak || 0) + 1 });
+  }));
+  const card = { background: C.surface2, border: "1.5px solid " + C.border, borderRadius: 16, padding: 14 };
+  const h2 = (t, col) => React.createElement("div", { style: { fontSize: 12, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: col || C.muted, marginBottom: 10 } }, t);
+  const check = (on, onClick) => React.createElement("div", { onClick, style: { width: 22, height: 22, borderRadius: 7, border: "2px solid " + (on ? C.accent : C.muted), background: on ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1A2E", fontSize: 14, fontWeight: 900, cursor: "pointer", flexShrink: 0 } }, on ? "\u2713" : "");
+  const dateLong = now.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  const revText = rev ? tncBot("revis\u00E3o da semana", { events, tasks, habits, subjects: [], bdays: [], sugs: sugs || [] }, null).reply.replace(/\*\*/g, "") : "";
+  return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 14 } },
+    React.createElement("div", { style: Object.assign({}, card, { background: "linear-gradient(160deg,#16213E,#1A1A2E)", padding: 18 }) },
+      React.createElement("div", { style: { fontSize: 12, color: C.muted, textTransform: "capitalize" } }, dateLong),
+      React.createElement("div", { style: { fontFamily: "Impact, Arial Black, sans-serif", fontSize: 26, letterSpacing: 1, background: "linear-gradient(90deg,#E2B96F,#C9863A)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", margin: "2px 0 10px" } }, greet + (uname ? ", " + uname : "") + "!"),
+      totalCount > 0 && React.createElement("div", null,
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 6 } }, React.createElement("span", null, "Progresso de hoje"), React.createElement("span", null, doneCount + " de " + totalCount)),
+        React.createElement("div", { style: { height: 8, borderRadius: 99, background: "#2D2D44", overflow: "hidden" } }, React.createElement("div", { style: { width: pct + "%", height: "100%", background: "linear-gradient(90deg,#E2B96F,#C9863A)", transition: "width .3s" } }))),
+      sugs && sugs.length > 0 && React.createElement("div", { style: { marginTop: 12, fontSize: 12, color: C.accent } }, "\u{1F916} " + sugs.length + " sugest\u00E3o(\u00F5es) do agente aguardando voc\u00EA, no topo da tela")),
+    overdue.length > 0 && React.createElement("div", { style: Object.assign({}, card, { borderColor: "#FF444466" }) },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, h2("\u26A0\uFE0F Atrasadas (" + overdue.length + ")", "#FF6B6B"), React.createElement("button", { onClick: moveAll, style: { background: "none", border: "1px solid #FF6B6B", color: "#FF6B6B", borderRadius: 8, padding: "3px 9px", fontSize: 10, cursor: "pointer", fontFamily: "inherit", marginBottom: 10 } }, "Tudo para hoje")),
+      overdue.slice(0, 6).map((t) => React.createElement("div", { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 0" } },
+        check(false, () => toggleTask(t.id)),
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } }, React.createElement("div", { style: { fontSize: 13, color: C.text } }, t.title), React.createElement("div", { style: { fontSize: 10, color: C.muted } }, "venceu " + ptDate(t.deadline))),
+        React.createElement("button", { onClick: () => moveToday(t.id), style: { background: "none", border: "1px solid " + C.border, color: C.muted, borderRadius: 8, padding: "3px 8px", fontSize: 10, cursor: "pointer", fontFamily: "inherit" } }, "Hoje")))),
+    React.createElement("div", { style: card }, h2("\u{1F4C5} Agenda de hoje"),
+      exp.length === 0 ? React.createElement("div", { style: { fontSize: 13, color: C.muted, padding: "6px 0" } }, "Nada marcado. Dia livre! \u{1F389}")
+      : exp.map((e, i) => {
+        const past = e.time && e.time !== "00:00" && e.time < nowT;
+        const isNext = i === nextIdx;
+        const col = (CTX[e.context] || CTX.personal).main;
+        return React.createElement("div", { key: e.id, style: { display: "flex", gap: 12, padding: "9px 10px", marginBottom: 6, borderRadius: 12, background: isNext ? col + "22" : "transparent", border: "1.5px solid " + (isNext ? col : "transparent"), opacity: past ? 0.5 : 1 } },
+          React.createElement("div", { style: { width: 46, fontSize: 13, fontWeight: 800, color: col } }, e.time && e.time !== "00:00" ? e.time : "dia"),
+          React.createElement("div", { style: { flex: 1, minWidth: 0 } }, React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: C.text } }, e.title + (e.recurrence && e.recurrence !== "none" ? " \u{1F501}" : "")), (e.duration > 0 || e.desc) && React.createElement("div", { style: { fontSize: 10.5, color: C.muted } }, [e.duration > 0 ? fmtMins(e.duration) : null, e.desc].filter(Boolean).join(" \u00B7 "))),
+          isNext && React.createElement("div", { style: { fontSize: 9, fontWeight: 800, color: col, alignSelf: "center" } }, "PR\u00D3XIMO"));
+      })),
+    React.createElement("div", { style: card }, h2("\u2705 Tarefas com prazo hoje"),
+      dueToday.length === 0 ? React.createElement("div", { style: { fontSize: 13, color: C.muted } }, "Nenhuma tarefa para hoje.")
+      : dueToday.map((t) => React.createElement("div", { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 0" } },
+        check(t.status === "done", () => toggleTask(t.id)),
+        React.createElement("div", { style: { flex: 1, fontSize: 13, color: t.status === "done" ? C.muted : C.text, textDecoration: t.status === "done" ? "line-through" : "none" } }, t.title),
+        React.createElement("span", { style: { fontSize: 9, fontWeight: 800, color: (PRI[t.priority] || PRI.medium).color } }, (PRI[t.priority] || PRI.medium).label)))),
+    hb.length > 0 && React.createElement("div", { style: card }, h2("\u{1F4AA} H\u00E1bitos de hoje"),
+      hb.map((h) => { const on = !!(h.log && h.log[iso]); return React.createElement("div", { key: h.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 0" } },
+        check(on, () => toggleHabit(h.id)),
+        React.createElement("div", { style: { flex: 1, fontSize: 13, color: on ? C.muted : C.text } }, (h.icon || "") + " " + h.title),
+        React.createElement("span", { style: { fontSize: 10, color: C.muted } }, "\u{1F525} " + (h.streak || 0))); })),
+    React.createElement("div", { style: card },
+      React.createElement("div", { onClick: () => setRev(!rev), style: { display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" } }, h2("\u{1F4CB} Revis\u00E3o da semana"), React.createElement("span", { style: { color: C.muted, marginBottom: 10 } }, rev ? "\u25B2" : "\u25BC")),
+      rev && React.createElement("div", { style: { fontSize: 12.5, color: C.text, lineHeight: 1.6, whiteSpace: "pre-wrap" } }, revText),
+      !rev && React.createElement("div", { style: { fontSize: 11, color: C.muted } }, "Toque para ver o balan\u00E7o dos \u00FAltimos 7 dias e os pr\u00F3ximos. Todo domingo \u00E0s 19h voc\u00EA recebe o resumo por notifica\u00E7\u00E3o.")));
+}
 function AppInner({ onLogout }) {
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState("today");
   const [evModal, setEvModal] = useState({ open: false, date: null });
   const [searchOpen, setSearchOpen] = useState(false);
   const [ready, setReady] = useState(false);
@@ -3098,6 +3214,7 @@ function AppInner({ onLogout }) {
   }, []);
   if (!ready) return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, fontFamily: "'Playfair Display',serif", fontWeight: 800, background: "linear-gradient(90deg,#C9863A,#C9863A,#E2B96F)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "Agenda+"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, [0, 1, 2].map((i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { width: 8, height: 8, borderRadius: "50%", background: C.accent, animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` } }))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: C.muted } }, "Carregando seus dados..."));
   const views = {
+    today: React.createElement(TodayView, { events, tasks, setTasks, habits, setHabits, sugs }),
     dashboard: /* @__PURE__ */ React.createElement(Dashboard, { events, tasks, habits, bdays }),
     ai: /* @__PURE__ */ React.createElement(AIAssistantView, { tasks, events, habits, subjects, bdays, sugs, setEvents, setTasks, setBdays }),
     calendar: /* @__PURE__ */ React.createElement(CalendarView, { events, setEvents, onAddEvent: (d) => setEvModal({ open: true, date: d }), bdays, uf: calUf, setUf: setCalUf }),
