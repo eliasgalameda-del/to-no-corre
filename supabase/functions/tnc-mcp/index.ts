@@ -36,6 +36,7 @@ const eventFields = {
   id: idSchema,
   title: text(200),
   context: contextSchema.optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   date: isoDateSchema,
   time: timeSchema.optional(),
   duration: boundedMinutes.optional(),
@@ -52,6 +53,7 @@ const eventCreateSchema = z.object({
   id: idSchema,
   title: text(200),
   context: contextSchema.default('personal'),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   date: isoDateSchema,
   time: timeSchema.default('00:00'),
   duration: boundedMinutes.default(0),
@@ -67,6 +69,7 @@ const eventCreateSchema = z.object({
 const eventPatchSchema = z.object({
   title: text(200).optional(),
   context: contextSchema.optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   date: isoDateSchema.optional(),
   time: timeSchema.optional(),
   duration: boundedMinutes.optional(),
