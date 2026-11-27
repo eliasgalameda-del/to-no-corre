@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js; style-src 'unsafe-inline'; connect-src https://myuwytzbkckemcyfvhkx.supabase.co https://cdn.jsdelivr.net; img-src 'self' data:; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta name="theme-color" content="#1A1A2E">
+  <title>Conectar ao Tô no Corre</title>
+  <style>
+    :root { color-scheme: dark; --navy:#1A1A2E; --panel:#202039; --gold:#E2B96F; --muted:#C9B58A; --line:#393951; --red:#ff9a90; }
+    * { box-sizing:border-box; }
+    body { visibility:hidden; margin:0; min-height:100vh; background:radial-gradient(120% 80% at 50% 0%,#16213E 0%,var(--navy) 58%,#10101b 100%); color:#F3E3BD; font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; padding:24px 16px; }
+    main { width:min(100%,560px); margin:4vh auto; }
+    .brand { text-align:center; margin-bottom:22px; }
+    .brand strong { display:block; font-weight:950; letter-spacing:3px; font-size:29px; color:var(--gold); }
+    .brand span { color:#8A7560; font-size:13px; }
+    .card { background:rgba(32,32,57,.96); border:1px solid var(--line); border-radius:20px; padding:24px; box-shadow:0 14px 42px #0006; }
+    h1 { margin:0 0 8px; font-size:24px; line-height:1.2; color:var(--gold); }
+    h2 { margin:22px 0 8px; font-size:15px; }
+    p { margin:8px 0; color:var(--muted); }
+    .notice { border:1px solid #5b4b2d; background:#2a2630; border-radius:12px; padding:13px; margin:17px 0; font-size:14px; }
+    .client { padding:14px; border-radius:12px; background:#17172a; border:1px solid var(--line); overflow-wrap:anywhere; }
+    .client-name { color:#fff0cf; font-size:18px; font-weight:750; }
+    .subtle { color:#a99a7c; font-size:13px; overflow-wrap:anywhere; }
+    .scopes { list-style:none; margin:8px 0; padding:0; display:grid; gap:8px; }
+    .scopes li { border-left:3px solid var(--gold); padding:7px 10px; background:#17172a; overflow-wrap:anywhere; }
+    .scope-code { display:block; color:#fff0cf; font-family:ui-monospace,SFMono-Regular,monospace; font-size:13px; }
+    .scope-help { display:block; color:#b6a889; font-size:12px; margin-top:3px; }
+    label { display:block; margin:12px 0 5px; color:#c9b58a; font-size:13px; font-weight:650; }
+    input { width:100%; padding:12px; border:1px solid var(--line); border-radius:10px; background:#151526; color:#fff0cf; font:inherit; }
+    input:focus-visible, button:focus-visible { outline:3px solid #fff; outline-offset:2px; }
+    button { width:100%; border:0; border-radius:11px; padding:13px 16px; font:700 15px system-ui,sans-serif; cursor:pointer; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .primary { margin-top:16px; color:#17172a; background:linear-gradient(90deg,#E2B96F,#C9863A); }
+    .secondary { margin-top:10px; color:var(--gold); border:1px solid var(--line); background:transparent; }
+    .error { color:var(--red); border:1px solid #72413d; background:#342124; padding:11px; border-radius:10px; margin:12px 0; }
+    .hidden { display:none !important; }
+    .small { font-size:12px; color:#988b73; margin-top:17px; }
+    .actions { display:grid; gap:8px; margin-top:14px; }
+    @media(max-width:480px) { body { padding:13px; } main { margin:2vh auto; } .card { padding:19px; } h1 { font-size:22px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="brand" aria-label="Tô no Corre"><strong>tô no CORRE</strong><span>Sua agenda, no seu tempo.</span></header>
+    <section class="card" aria-live="polite">
+      <div id="loading"><h1>Verificando pedido…</h1><p>Aguarde enquanto confirmamos a solicitação de conexão.</p></div>
+      <div id="missing" class="hidden"><h1>Pedido incompleto</h1><p>Não encontramos o identificador desta solicitação. Volte ao aplicativo que iniciou a conexão e tente novamente.</p></div>
+      <div id="login" class="hidden">
+        <h1>Entre para continuar</h1><p>Use sua conta do Tô no Corre. A autorização só será concedida depois da sua escolha.</p>
+        <div id="login-error" class="error hidden" role="alert"></div>
+        <form id="login-form" novalidate>
+          <label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="username" inputmode="email" required>
+          <label for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+          <div id="password2-wrap" class="hidden"><label for="password2">Confirmar senha</label><input id="password2" name="password2" type="password" autocomplete="new-password"></div>
+          <button id="login-submit" class="primary" type="submit">Entrar</button>
+        </form>
+        <button id="mode-toggle" class="secondary" type="button">Primeira vez? Criar conta</button>
+        <p class="small">Ao criar uma conta, talvez seja necessário confirmar seu e-mail. O pedido de autorização pode expirar; nesse caso, inicie a conexão novamente.</p>
+      </div>
+      <div id="consent" class="hidden">
+        <h1>Conectar uma conta?</h1>
+        <p>Confira com atenção quem está pedindo acesso e o que foi solicitado.</p>
+        <div class="client" aria-label="Aplicativo solicitante">
+          <div class="subtle">Aplicativo solicitante</div><div id="client-name" class="client-name"></div>
+          <div id="client-id" class="subtle"></div>
+          <div id="redirect-uri" class="subtle"></div>
+        </div>
+        <div id="account-email" class="subtle" style="margin-top:10px"></div>
+        <h2>Escopos solicitados</h2><ul id="scopes" class="scopes"></ul>
+        <div class="notice"><strong>Acesso atual do Tô no Corre:</strong> este servidor MCP, nesta versão, apenas verifica se a conexão está autenticada. Ele não lê nem altera eventos ou tarefas. Os escopos mostrados acima são os pedidos de autenticação do cliente; eles não significam permissões extras escondidas.</div>
+        <div id="decision-error" class="error hidden" role="alert"></div>
+        <div class="actions"><button id="approve" class="primary" type="button">Aprovar e conectar</button><button id="deny" class="secondary" type="button">Negar</button></div>
+        <p class="small">A aprovação autoriza o cliente OAuth identificado acima. Não compartilhe senha, código de confirmação ou tokens com o aplicativo.</p>
+        <button id="switch-account" class="secondary" type="button">Sair e usar outra conta</button>
+      </div>
+      <div id="already" class="hidden">
+        <h1>Esta solicitação já foi autorizada</h1><p>O Supabase informou que já existe uma autorização para este pedido. Nenhuma nova aprovação foi feita nesta tela. Você pode continuar para retornar ao cliente.</p>
+        <div id="already-details" class="client"></div><div id="already-error" class="error hidden" role="alert"></div>
+        <button id="continue" class="primary" type="button">Continuar para o cliente</button>
+      </div>
+      <div id="done" class="hidden"><h1>Solicitação processada</h1><p>Se o retorno não abrir automaticamente, volte ao aplicativo que iniciou a conexão.</p></div>
+      <div id="fatal" class="hidden"><h1>Não foi possível continuar</h1><p id="fatal-message" role="alert">Não conseguimos validar a solicitação. Volte ao cliente e inicie a conexão novamente.</p></div>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.js" defer></script>
+  <script src="./consent.js" defer></script>
+</body>
+</html>
